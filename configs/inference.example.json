@@ -1,0 +1,10 @@
+{
+  "model_dir": "${RL_LHM_MODEL_DIR}",
+  "input_csv": "${RL_LHM_INPUT_CSV}",
+  "image_root": "${RL_LHM_IMAGE_ROOT}",
+  "output_csv": "${RL_LHM_OUTPUT_CSV}",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "seed": 2026,
+  "max_new_tokens": 512
+}

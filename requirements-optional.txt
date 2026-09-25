@@ -1,0 +1,9 @@
+# Optional model inference, plotting, and external RL-runtime adapters.
+torch>=2.1
+transformers>=4.45
+Pillow>=10
+matplotlib>=3.8
+tqdm>=4.66
+qwen-vl-utils>=0.0.10
+omegaconf>=2.3
+# VeRL/vLLM/Ray versions must match the upstream runtime used for the paper.
