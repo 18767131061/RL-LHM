@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Convert real961 multimodal JSONL into VERL development datasets."""
+"""Convert real961 JSONL while preserving supplied train/validation boundaries."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -93,42 +94,127 @@ def write_verl(rows: list[dict], output: Path, source: str, class_counts: dict[s
             stream.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def class_counts_for(rows: list[dict]) -> dict[str, int]:
+    """Count positive input groups by the current converter's majority label."""
+    return dict(sorted(Counter(row["gt_major"] for row in rows if row["gt_major"] is not None).items()))
+
+
+def row_summary(rows: list[dict]) -> dict:
+    return {
+        "input_groups": len(rows),
+        "positive_input_groups": sum(bool(row["gt_dets"]) for row in rows),
+        "background_input_groups": sum(not row["gt_dets"] for row in rows),
+        "statistical_patients": len({row["metadata"]["statistical_patient_id"] for row in rows}),
+    }
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def validate_source_boundaries(train: list[dict], validation: list[dict]) -> None:
+    # Check the identity exported to VeRL as well as the source patient ID.
+    for field in ("patient_id", "statistical_patient_id"):
+        if {row["metadata"][field] for row in train} & {
+            row["metadata"][field] for row in validation
+        }:
+            raise RuntimeError(f"Patient overlap between train and validation sources ({field})")
+    uids = [row["uid"] for row in train + validation]
+    if len(uids) != len(set(uids)):
+        raise RuntimeError("Duplicate input-group UID in supplied train/validation sources")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--train-jsonl", required=True)
     parser.add_argument("--validation-jsonl")
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument(
+        "--refit-train-validation",
+        action="store_true",
+        help=(
+            "Additionally write a named combined refit file after model selection; "
+            "never replace the train-only file"
+        ),
+    )
     args = parser.parse_args()
+    if args.refit_train_validation and not args.validation_jsonl:
+        parser.error("--refit-train-validation requires --validation-jsonl")
 
     data_root = Path(args.data_root).resolve()
-    train = [unpack(row, data_root) for row in load_jsonl(Path(args.train_jsonl).resolve())]
+    train_path = Path(args.train_jsonl).resolve()
+    validation_path = Path(args.validation_jsonl).resolve() if args.validation_jsonl else None
+    train = [unpack(row, data_root) for row in load_jsonl(train_path)]
     validation = (
-        [unpack(row, data_root) for row in load_jsonl(Path(args.validation_jsonl).resolve())]
-        if args.validation_jsonl
-        else []
+        [unpack(row, data_root) for row in load_jsonl(validation_path)]
+        if validation_path is not None else []
     )
-    development = train + validation
-    if validation and {row["metadata"]["patient_id"] for row in train} & {
-        row["metadata"]["patient_id"] for row in validation
-    }:
-        raise RuntimeError("Patient overlap between original train and validation sources")
-    class_counts = dict(
-        sorted(Counter(row["gt_major"] for row in development if row["gt_major"] is not None).items())
-    )
+    if not train:
+        raise RuntimeError("The supplied train source is empty")
+    if validation_path is not None and not validation:
+        raise RuntimeError("The supplied validation source is empty")
+    validate_source_boundaries(train, validation)
+    class_counts = class_counts_for(train)
     output_dir = Path(args.output_dir).resolve()
-    write_verl(development, output_dir / "real961_rl_train.jsonl", "real961_rl_train", class_counts)
+    outputs = {}
+
+    def emit(rows: list[dict], stem: str, counts: dict[str, int], role: str, population: str) -> None:
+        path = output_dir / f"{stem}.jsonl"
+        write_verl(rows, path, stem, counts)
+        outputs[stem] = {
+            "path": str(path),
+            "sha256": sha256_file(path),
+            "role": role,
+            **row_summary(rows),
+            "class_counts": counts,
+            "class_counts_population": population,
+        }
+
+    emit(train, "real961_rl_train", class_counts, "training_only", "supplied_train_source")
+    if validation:
+        emit(validation, "real961_rl_validation", class_counts, "held_out_validation", "supplied_train_source")
     monitor = validation if validation else train[: min(len(train), 64)]
-    write_verl(monitor, output_dir / "real961_rl_monitor.jsonl", "real961_rl_monitor", class_counts)
+    emit(
+        monitor,
+        "real961_rl_monitor",
+        class_counts,
+        "held_out_validation_monitor" if validation else "training_subset_diagnostic_not_validation",
+        "supplied_train_source",
+    )
+    if args.refit_train_validation:
+        refit = train + validation
+        emit(
+            refit,
+            "real961_rl_refit_train_validation",
+            class_counts_for(refit),
+            "explicit_combined_refit_after_selection",
+            "supplied_train_and_validation_sources",
+        )
     audit = {
-        "development_input_groups": len(development),
-        "development_positive_input_groups": sum(bool(row["gt_dets"]) for row in development),
-        "development_background_input_groups": sum(not row["gt_dets"] for row in development),
-        "monitor_input_groups": len(monitor),
-        "development_patients": len({row["metadata"]["patient_id"] for row in development}),
-        "monitor_patients": len({row["metadata"]["patient_id"] for row in monitor}),
-        "class_positive_slice_counts": class_counts,
-        "test_data_used": False,
+        "contract_version": 2,
+        "split_policy": "preserve_supplied_train_validation_boundaries",
+        "sources": {
+            "train": {"path": str(train_path), "sha256": sha256_file(train_path), **row_summary(train)},
+            "validation": (
+                None if validation_path is None else
+                {"path": str(validation_path), "sha256": sha256_file(validation_path), **row_summary(validation)}
+            ),
+        },
+        "outputs": outputs,
+        "class_counts_definition": {
+            "unit": "positive_three_phase_input_group",
+            "label": "gt_major (majority lesion-record label; lexical maximum breaks ties)",
+            "background_groups_included": False,
+            "zero_count_classes_included": False,
+        },
+        "refit_requested": args.refit_train_validation,
+        "validation_held_out_from_refit": False if args.refit_train_validation else None,
+        "source_partition_provenance": "caller_supplied",
         "visual_z_status": "not_extracted",
     }
     with (output_dir / "audit.json").open("w", encoding="utf-8") as stream:

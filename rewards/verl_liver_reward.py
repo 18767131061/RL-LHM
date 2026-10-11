@@ -1,12 +1,21 @@
 import json
 import math
 import os
-import re
+import sys
 from collections import Counter
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+
+# VeRL also loads this callback by absolute file path outside the repository
+# working directory. Make the sibling schema package available in that mode.
+_repository_root = str(Path(__file__).resolve().parents[1])
+if _repository_root not in sys.path:
+    sys.path.insert(0, _repository_root)
+
+from evaluation.schema import DEFAULT_LABEL_ALIASES, SchemaError, canonical_label, parse_completion
 
 CLASSES_PRIVATE = ["HCC", "ICC", "FNH", "HA_Hemangioma", "nodule_CYST"]
 CLASSES_5CLS = ["HCC", "ICC", "HA_Hemangioma", "BCLM", "CRLM"]
@@ -94,25 +103,16 @@ def _empty_reward(seq_confidence: float = 0.0) -> Dict[str, Any]:
 
 
 def canon_label(x: Optional[str]) -> Optional[str]:
-    if not x:
+    """Resolve only the exact aliases accepted by the evaluation schema.
+
+    A label embedded in free text (for example ``not HCC`` or ``HCC or ICC``)
+    is not a diagnostic label. Keep the optional-return adapter for callers
+    while sharing the whitelist with the strict completion parser.
+    """
+    try:
+        return canonical_label(x)
+    except SchemaError:
         return None
-    t = str(x).lower().replace("-", "_").replace(" ", "")
-    if "hcc" in t or "肝细胞" in t:
-        return "HCC"
-    if "icc" in t or "胆管" in t:
-        return "ICC"
-    if "fnh" in t or "局灶性结节" in t:
-        return "FNH"
-    if "hemangioma" in t or "血管瘤" in t or "ha_hemangioma" in t or t == "hh":
-        return "HA_Hemangioma"
-    if "bclm" in t:
-        return "BCLM"
-    if "crlm" in t:
-        return "CRLM"
-    if "nodule" in t or "cyst" in t or "囊肿" in t or "结节" in t:
-        return "nodule_CYST"
-    m = re.search(r"(HCC|ICC|FNH|HA[_\-]?Hemangioma|BCLM|CRLM|nodule[_\-]?CYST)", str(x), flags=re.I)
-    return canon_label(m.group(1)) if m else None
 
 
 def is_background_label(x: Optional[str]) -> bool:
@@ -185,41 +185,30 @@ def bbox_giou_xyxy(a: List[float], b: List[float]) -> float:
     return float(iou - ((cover_area - union) / cover_area)) if cover_area > 0 else float(iou)
 
 
-def parse_completion_from_text(txt: str) -> Optional[Dict[str, Any]]:
+def parse_completion_from_text(
+    txt: str,
+    classes: Optional[Iterable[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Adapt the shared strict parser to the legacy reward record structure.
+
+    Without a cohort argument, accept the union of documented class labels;
+    callers with an active label space must supply it or apply their own
+    cohort filter. Any invalid record invalidates the entire completion.
+    """
     try:
-        obj = json.loads(str(txt).strip())
-    except Exception:
+        parsed = parse_completion(
+            txt,
+            DEFAULT_LABEL_ALIASES.values() if classes is None else classes,
+        )
+    except SchemaError:
         return None
-    if not isinstance(obj, dict) or not isinstance(obj.get("detections"), list):
-        return None
-    lesions = []
-    background_phases = []
-    for d in obj["detections"]:
-        if not isinstance(d, dict):
-            return None
-        if "label" not in d or "bbox_2d" not in d:
-            return None
-        lab = canon_label(d.get("label"))
-        ph = str(d.get("phase", "")).lower()
-        if ph not in ("a", "p", "v"):
-            return None
-        bb = normalize_bbox_to_xyxy(d.get("bbox_2d"), assume_cxcywh=False)
-        if bb is None or not all(math.isfinite(value) for value in bb):
-            return None
-        if is_background_label(d.get("label")):
-            if bb != [-1.0, -1.0, -1.0, -1.0] or ph in background_phases:
-                return None
-            background_phases.append(ph)
-        elif lab is not None:
-            x1, y1, x2, y2 = bb
-            if min(bb) < 0 or max(bb) > 1000 or x2 <= x1 or y2 <= y1:
-                return None
-            lesions.append({"label": lab, "phase": ph, "bbox": bb})
-        else:
-            return None
-    if any(item["phase"] in background_phases for item in lesions):
-        return None
-    return {"lesions": lesions, "background_phases": background_phases}
+    return {
+        "lesions": [
+            {"label": item.label, "phase": item.phase, "bbox": list(item.box)}
+            for item in parsed.detections
+        ],
+        "background_phases": list(parsed.background_phases),
+    }
 
 
 def parse_detections_from_text(txt: str) -> List[Dict[str, Any]]:
@@ -410,7 +399,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None, **kw
 
         gt_dets = gt_obj.get("gt_dets", []) or []
         gt_background_phases = gt_obj.get("background_phases", []) or []
-        parsed = parse_completion_from_text(solution_str)
+        parsed = parse_completion_from_text(solution_str, classes)
         if parsed is None:
             return _empty_reward(seq_confidence=seq_confidence)
         preds = parsed["lesions"]

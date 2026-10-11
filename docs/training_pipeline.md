@@ -1,5 +1,125 @@
 # Training pipeline
 
-`training/run_verl_lhm_variant.py` is the public launcher for the paper variants `vanilla_grpo`, `rars_grpo`, `rars_shae`, `rars_dacvq_vgs`, and `full_rl_lhm`. It accepts explicit training data, base-model, output, and script directories. `training/verl_lhm_launcher.py` adapts the launcher to a local VeRL installation.
+`training/run_verl_lhm_variant.py` exposes all eight combinations of RARS, SHAE, and the coupled DA-CVQ/VGS curriculum. `training/verl_lhm_launcher.py` adapts the launcher to a local VeRL installation. These commands generate configurations or start new runs; configuration generation does not reproduce the paper's reported measurements.
 
 The reward path is `rewards/verl_liver_reward.py`; SHAE and DA-CVQ/VGS state are implemented in `rl/core.py` and `rl/verl_lhm_extensions.py`. The code does not bundle VeRL, vLLM, Ray, CUDA, data, or weights.
+
+## Convert train and validation sources
+
+For the reported primary private-cohort experiments, model training used the 654 training patients. The 117 validation patients were used for parameter selection and were not added to the final model's training set. To preserve this protocol, use the train-only output below; the optional combined-refit output describes a different data-use policy.
+
+The converter accepts already prepared three-image groups and structured targets. It checks that the three referenced image files exist; it does not select CT slices, register phases, or extract visual embeddings.
+
+```bash
+python preprocess/build_verl_real961_dataset.py \
+  --data-root /path/to/images \
+  --train-jsonl /path/to/train.jsonl \
+  --validation-jsonl /path/to/validation.jsonl \
+  --output-dir ./outputs/prepared
+```
+
+The default outputs are:
+
+| File | Source and role |
+| --- | --- |
+| `real961_rl_train.jsonl` | Only the supplied training records. |
+| `real961_rl_validation.jsonl` | Only the supplied validation records; written when that source is provided. |
+| `real961_rl_monitor.jsonl` | Validation records when available; otherwise at most the first 64 training records for training diagnostics, not held-out validation. |
+| `audit.json` | Contract version 2: source/output SHA256 values, patient/group counts, output roles, and the current conversion's class-count definitions. |
+
+The converter rejects overlap in either supplied `patient_id` or `statistical_patient_id`, duplicate input-group UIDs, empty training sources, and explicitly supplied empty validation sources. It preserves the caller's source partition; it does not establish how that partition was created.
+
+For this converter, `class_counts` counts **positive three-phase input groups by `gt_major`**, not patients or individual lesion records. `gt_major` is the most frequent active lesion-record label in a group; equal counts use the lexical maximum label. Background groups and zero-count classes are omitted. The default training, validation, and monitor files all carry counts derived only from the supplied training source. The metadata documents this conversion policy; it does not establish the original experiments' counting population or unit.
+
+To explicitly prepare a combined training/validation refit dataset after model selection:
+
+```bash
+python preprocess/build_verl_real961_dataset.py \
+  --data-root /path/to/images \
+  --train-jsonl /path/to/train.jsonl \
+  --validation-jsonl /path/to/validation.jsonl \
+  --output-dir ./outputs/refit_prepared \
+  --refit-train-validation
+```
+
+This adds `real961_rl_refit_train_validation.jsonl`; it never substitutes combined data into `real961_rl_train.jsonl`. The additional file carries class counts computed from both supplied sources. `audit.json` marks the explicit refit role and that the validation source is no longer held out from this combined file. Starting a refit requires passing that exact additional filename as `--train-file`. The flag requires a nonempty validation source and does not decide whether a refit is appropriate for an experiment.
+
+## Eight component combinations
+
+| `--variant` | RARS | SHAE | DA-CVQ/VGS |
+| --- | --- | --- | --- |
+| `vanilla_grpo` | off | off | off |
+| `shae_grpo` | off | on | off |
+| `dacvq_vgs_grpo` | off | off | on |
+| `shae_dacvq_vgs` | off | on | on |
+| `rars_grpo` | on | off | off |
+| `rars_shae` | on | on | off |
+| `rars_dacvq_vgs` | on | off | on |
+| `full_rl_lhm` | on | on | on |
+
+RARS off selects the existing `vanilla` reward mode; SHAE off selects the existing GRPO estimator; DA-CVQ/VGS off omits the custom curriculum sampler. DA-CVQ and VGS remain one coupled factor. The previously exposed five names keep their component settings and numeric hyperparameters. All combinations retain the existing learning rate `1e-6`, clipping `0.20`, KL coefficient `0.01`, two completions per prompt, and six formal epochs.
+
+The following loop writes one manifest per combination without importing VeRL, checking GPUs, or loading model weights:
+
+```bash
+for variant in vanilla_grpo shae_grpo dacvq_vgs_grpo shae_dacvq_vgs \
+  rars_grpo rars_shae rars_dacvq_vgs full_rl_lhm; do
+  python training/run_verl_lhm_variant.py \
+    --train-file ./outputs/prepared/real961_rl_train.jsonl \
+    --validation-file ./outputs/prepared/real961_rl_validation.jsonl \
+    --model-path /path/to/base-model \
+    --output-dir "./outputs/configs/${variant}" \
+    --variant "$variant" \
+    --seed 2026 \
+    --scripts-dir . \
+    --n-gpus 4 \
+    --config-only
+done
+```
+
+Even in `--config-only` mode, the training file must exist and contain at least four records, and the model directory must exist. This mode writes `run_manifest.json` only; it does not validate weights, visual embeddings, or external runtime compatibility. The `--n-gpus` value describes the generated configuration.
+
+`--validation-file` is optional and binds the supplied path and hash in the manifest. It must differ from the training path; the launcher does not inspect patient identities, so use the converter's split checks or an equivalent check for other inputs. The launcher retains `trainer.val_before_train=False` and `trainer.test_freq=-1`, so merely supplying this file does not enable validation or model selection. Without the option, the existing `data.val_files` placeholder points to the training file and the manifest explicitly marks it as not held-out validation.
+
+Remove `--config-only` to start training in a prepared GPU environment. Curriculum-enabled variants require extracted `extra_info.visual_z`; this converter leaves it `null`. The current launcher checks the first training record before starting those variants. Supply a consistent, documented extraction pipeline and complete per-record vectors before a real run. GPU `--smoke` runs use one step without curriculum or two with curriculum so the second epoch can consume learned sampling state. Neither configuration generation nor a smoke run establishes the full training result.
+
+## External policy-loss boundary
+
+The launcher leaves the existing VeRL policy-loss path unchanged. Its manifest retains the carrier's declared token-level clipped PPO/GRPO description and separately marks external-runtime verification as unverified. The launcher neither pins nor inspects the upstream loss implementation; a generated manifest does not establish equivalence to the manuscript's completion-level importance ratio. That question requires the actual training runtime, version, configuration, and loss implementation.
+
+## CPU entry-point checks
+
+The CLI checks use synthetic image groups and Python's standard library. Every converter and launcher subprocess runs with `-S`, which disables installed site packages:
+
+```bash
+python -S -m unittest discover -s tests -p test_training_data_cli.py -v
+```
+
+They exercise all eight configuration-only variants, separate/default/refit datasets, train-only count propagation, source/output manifests, patient overlap rejection, duplicate input groups, empty validation, monitor roles, and optional validation-file binding. They do not run GPU training or download any runtime or model.
+
+## Reward-loop integration
+
+`rl/patch_verl_agent_loop_logprobs.py` supplies the reward manager's
+`rollout_log_probs` field from the agent loop's response log probabilities.
+It recognizes one supported source block, backs up the original file as
+`.pre_rl_lhm`, and records the before/after hashes. Reapplying it is idempotent;
+unrecognized source layouts fail rather than receiving a guessed patch.
+
+```bash
+python rl/patch_verl_agent_loop_logprobs.py \
+  --agent-loop /path/to/verl/experimental/agent_loop/agent_loop.py \
+  --audit ./outputs/agent_loop_patch.json
+```
+
+Use this only in a separate, explicitly selected VeRL checkout. The integration
+reference is [VeRL commit
+`fc3a5acae155425909bc30c982c3cea0784ce3c2`](https://github.com/verl-project/verl/blob/fc3a5acae155425909bc30c982c3cea0784ce3c2/verl/experimental/agent_loop/agent_loop.py); verify the actual source block before
+applying it. This reference and a successful text patch are not a complete
+runtime lock or a training validation. The helper requires upstream `torch`
+and `TensorDict` bindings, aligns log probabilities to the response width,
+and does not modify the policy loss. Verify generated-token masks and lengths
+against the installed reward-loop runtime before training.
+
+Deploy this complete package, including `evaluation/schema.py`, with the reward
+callback. Copying only the reward file into an unrelated flat directory omits
+its shared strict parser dependency.

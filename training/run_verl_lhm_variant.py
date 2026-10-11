@@ -20,6 +20,9 @@ from pathlib import Path
 
 VARIANTS = {
     "vanilla_grpo": {"reward": "vanilla", "shae": False, "vgs": False},
+    "shae_grpo": {"reward": "vanilla", "shae": True, "vgs": False},
+    "dacvq_vgs_grpo": {"reward": "vanilla", "shae": False, "vgs": True},
+    "shae_dacvq_vgs": {"reward": "vanilla", "shae": True, "vgs": True},
     "rars_grpo": {"reward": "rars", "shae": False, "vgs": False},
     "rars_shae": {"reward": "rars", "shae": True, "vgs": False},
     "rars_dacvq_vgs": {"reward": "rars", "shae": False, "vgs": True},
@@ -507,6 +510,10 @@ def validate_post_primary_risk_control_manifest(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--train-file", required=True)
+    parser.add_argument(
+        "--validation-file",
+        help="Optional separate validation JSONL; periodic validation remains disabled by default",
+    )
     parser.add_argument("--model-path", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--variant", choices=sorted(VARIANTS), required=True)
@@ -550,11 +557,16 @@ def main() -> None:
         parser.error("--experiment-label may contain only letters, digits, underscores, and hyphens")
 
     train_file = Path(args.train_file).resolve()
+    validation_file = Path(args.validation_file).resolve() if args.validation_file else None
     model_path = Path(args.model_path).resolve()
     output_dir = Path(args.output_dir).resolve()
     scripts_dir = Path(args.scripts_dir).resolve()
     if not train_file.is_file() or not model_path.is_dir():
         raise RuntimeError(f"Missing train file or model path: {train_file}, {model_path}")
+    if validation_file is not None and not validation_file.is_file():
+        raise RuntimeError(f"Missing validation file: {validation_file}")
+    if validation_file == train_file:
+        raise RuntimeError("--validation-file must differ from --train-file")
     required = {
         "launcher": scripts_dir / "verl_lhm_launcher.py",
         "reward": scripts_dir / "verl_liver_reward.py",
@@ -639,7 +651,7 @@ def main() -> None:
     overrides = [
         f"algorithm.adv_estimator={'shae' if config['shae'] else 'grpo'}",
         f"data.train_files={train_file}",
-        f"data.val_files={train_file}",
+        f"data.val_files={validation_file or train_file}",
         "data.prompt_key=prompt",
         "data.image_key=images",
         "data.max_prompt_length=1024",
@@ -784,6 +796,18 @@ def main() -> None:
         "train_file": str(train_file),
         "train_file_sha256": sha256_file(train_file),
         "train_rows": train_rows,
+        "validation_file": None if validation_file is None else str(validation_file),
+        "validation_file_sha256": (
+            None if validation_file is None else sha256_file(validation_file)
+        ),
+        "validation_usage": {
+            "val_before_train": False,
+            "test_freq": -1,
+            "data_val_files_role": (
+                "explicit_validation_file_partition_not_checked" if validation_file is not None
+                else "training_file_placeholder_not_held_out_validation"
+            ),
+        },
         "model_path": str(model_path),
         "output_dir": str(output_dir),
         "scripts_dir": str(scripts_dir),
@@ -842,6 +866,16 @@ def main() -> None:
             None if risk_control is None else risk_control.get("control_parameter_values")
         ),
         "policy_objective": "VERL token-level clipped PPO/GRPO (vanilla policy loss, clip ratio 0.20)",
+        "policy_objective_verification": {
+            "status": "unverified_external_runtime",
+            "description": (
+                "The policy_objective field records the existing carrier declaration. "
+                "This launcher does not pin or inspect the external VeRL policy-loss "
+                "implementation; equivalence to the manuscript completion-level ratio "
+                "has not been established."
+            ),
+        },
+        "configuration_only": args.config_only,
         "code_files": [
             {"path": str(path), "sha256": sha256_file(path)}
             for path in [*required.values(), *([] if attention_runtime is None else [attention_runtime])]
