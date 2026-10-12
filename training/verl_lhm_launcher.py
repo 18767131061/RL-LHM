@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import importlib.metadata
 import json
 import os
 import runpy
@@ -44,6 +45,32 @@ def _check_sample_uid_bridge() -> None:
         path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
 
 
+def _check_policy_contract() -> None:
+    from policy_contract import verify_core, verify_overrides
+    from patch_verl_token_mean import require_token_mean_patch
+    resolved = verify_overrides(sys.argv[1:])
+    paths = {}
+    for role, module in (("core", "verl.trainer.ppo.core_algos"), ("actor", "verl.workers.actor.dp_actor")):
+        spec = importlib.util.find_spec(module)
+        if spec is None or spec.origin is None:
+            raise RuntimeError(f"Unable to locate {module}")
+        paths[role] = Path(spec.origin).resolve()
+    dependencies = {}
+    for package in ("verl", "torch", "ray", "vllm", "transformers", "omegaconf"):
+        try:
+            dependencies[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            dependencies[package] = "not installed as a distribution"
+    audit = {"status": "verified_current_source_and_explicit_overrides", "overrides": resolved,
+             "python": sys.version, "dependency_versions": dependencies,
+             **verify_core(paths["core"]), **require_token_mean_patch(paths["actor"])}
+    target = os.environ.get("RL_LHM_POLICY_AUDIT_PATH")
+    if target:
+        path = Path(target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
+
+
 def main() -> None:
     # VERL may still try to initialize wandb if a generated command forgets to
     # override trainer.logger. Keep the local launcher safe for no-wandb usage.
@@ -54,6 +81,7 @@ def main() -> None:
     _import_local_extensions()
     if "algorithm.adv_estimator=shae" in sys.argv[1:]:
         _check_sample_uid_bridge()
+    _check_policy_contract()
     runpy.run_module("verl.trainer.main_ppo", run_name="__main__")
 
 

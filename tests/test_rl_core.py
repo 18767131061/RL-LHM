@@ -65,3 +65,10 @@ def test_completion_likelihood_and_mask_alignment():
     nll, confidence = completion_likelihood(log_probabilities, 2)
     assert nll == pytest.approx(0.3)
     assert confidence == pytest.approx(torch.exp(torch.tensor(-0.3)).item())
+
+
+def test_single_generated_token_is_not_squeezed_to_scalar():
+    ids, probabilities = extract_valid_rollout_log_probabilities(
+        torch.tensor([[10]]), torch.tensor([[1, 1]]), torch.tensor([[-.2]]))
+    assert ids.tolist() == [10]
+    assert completion_likelihood(probabilities, 1)[0] == pytest.approx(.2)

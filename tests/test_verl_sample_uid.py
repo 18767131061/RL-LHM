@@ -233,6 +233,7 @@ def test_launcher_checks_bridge_before_starting_shae(extension, reference_source
     monkeypatch.setenv("PYTHONPATH", "existing-path")
     monkeypatch.setattr(sys, "path", sys.path.copy())
     monkeypatch.setattr(sys, "argv", ["launcher", "algorithm.adv_estimator=shae"])
+    monkeypatch.setattr(launcher, "_check_policy_contract", lambda: None)  # independently covered by policy tests
     original_find = importlib.util.find_spec
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: (
         types.SimpleNamespace(origin=str(target)) if name == "verl.trainer.ppo.ray_trainer" else original_find(name)))
@@ -247,3 +248,31 @@ def test_launcher_checks_bridge_before_starting_shae(extension, reference_source
     assert str(ROOT / "rl") in os.environ["PYTHONPATH"].split(os.pathsep)
     assert "existing-path" in os.environ["PYTHONPATH"].split(os.pathsep)
     assert json.loads(audit.read_text())["patch_version"] == 1
+
+
+def test_curriculum_resume_rejects_same_size_changed_dataset(extension):
+    original = sampler(extension)
+    saved = original.state_dict()
+    changed = sampler(extension)
+    changed.dataset_signature = "different"
+    with pytest.raises(ValueError, match="identities"):
+        changed.load_state_dict(saved)
+
+
+def test_nonfinite_reward_and_feature_fail_before_state_update(extension):
+    curriculum = sampler(extension)
+    data = batch([1, float("nan")], ["v1", "v1"], ["a", "a"])
+    with pytest.raises(ValueError, match="finite"):
+        curriculum.update(data)
+    with pytest.raises(ValueError, match="finite"):
+        calculate(extension, data)
+    assert curriculum.vq.sample_to_code == {}
+    with pytest.raises(ValueError, match="finite"):
+        extension._safe_float_list([float("inf"), 1.])
+
+
+def test_shae_corrupt_resume_is_not_silently_reset(extension, tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text("{broken")
+    with pytest.raises(ValueError, match="Unreadable"):
+        extension.ShaeBaselineStore(.95, path)

@@ -4,7 +4,7 @@ The evaluation CLI and shared parser implement explicit, testable contracts. Thi
 
 For a reproducible training and evaluation run, specify the following without distributing patient-identifiable data:
 
-- **Training objective:** the actual policy-loss implementation, token- or completion-level probability ratio, clipping, masking and aggregation. The launcher delegates policy optimization to an external VeRL runtime. Its configuration manifest is not a substitute for checking that runtime's loss implementation.
+- **Training objective:** the actual policy-loss implementation, token- or completion-level probability ratio, clipping, masking and aggregation. The launcher fixes the current token-level configuration and checks pinned loss functions plus the required global-token-mean actor patch. This current contract does not establish the historical runtime.
 - **Runtime:** the exact VeRL, vLLM, PyTorch, Ray and Transformers versions, plus the patches used to propagate rollout log probabilities and persistent sample identity, and any changes to policy optimization.
 - **Visual features:** encoder checkpoint, feature layer, pooling, combination of phases, normalization, and extraction/caching schedule for `visual_z`. The dataset converter does not extract these vectors, and the curriculum-enabled variants require them.
 - **Input construction:** CT preprocessing and position-selection rules, patient and group identifiers, per-phase ground-truth annotations, and the complete intended input-key set.
@@ -44,3 +44,15 @@ with real PyTorch tensors and synthetic batches. They check cross-batch memory,
 distinct groups for repeated samples, sampler updates and nonuniform weights.
 Without the reference source, the source-integration cases are explicitly skipped.
 Passing them does not reproduce a distributed training run or historical results.
+
+The token-loss tests accept `RL_LHM_VERL_REFERENCE_DIR`, a directory containing
+unmodified `core_algos.py` and `dp_actor.py` from the stated reference commit.
+They execute the real extracted loss, KL and actor-update bodies with real CPU
+Torch/autograd. Model forward calls, DataProto and distributed collectives are
+substitutes; no complete Ray/FSDP/vLLM runtime executes. The unequal-length case
+checks that the patched gradient equals a single global masked token mean and
+that the unpatched reference gradient differs. `tests/test_rars_joint_grid.py`
+uses real evaluation/scoring over a small synthetic grid, with synthetic training
+completion and prediction receipts. It does not demonstrate exhaustive historical
+search or paper performance. Neither test suite supplies the unbundled feature
+layer/pooling/phase-fusion extraction recipe.

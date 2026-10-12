@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import math
 import os
 import signal
 import subprocess
@@ -16,6 +17,10 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rl"))
+from policy_contract import POLICY_OVERRIDES
 
 
 VARIANTS = {
@@ -35,6 +40,8 @@ REQUIRED_RISK_SCRIPTS = (
     "verl_completion_likelihood_reward_manager.py",
     "verl_lhm_extensions.py",
     "patch_verl_sample_uid.py",
+    "policy_contract.py",
+    "patch_verl_token_mean.py",
 )
 POST_PRIMARY_RISK_CONTROLS = {
     "author_nominal_control",
@@ -539,6 +546,7 @@ def main() -> None:
         default="ordinal",
     )
     parser.add_argument("--risk-matrix-scale", type=float, default=1.0)
+    parser.add_argument("--risk-profile", type=Path, help="Explicit joint-grid/frozen pair-weight profile")
     parser.add_argument("--experiment-label")
     args = parser.parse_args()
     try:
@@ -549,7 +557,7 @@ def main() -> None:
         )
     except ValueError as error:
         parser.error(str(error))
-    if args.risk_matrix_scale < 0:
+    if not math.isfinite(args.risk_matrix_scale) or args.risk_matrix_scale < 0:
         parser.error("--risk-matrix-scale must be non-negative")
     if args.minimum_free_mib <= 0:
         parser.error("--minimum-free-mib must be positive")
@@ -574,6 +582,8 @@ def main() -> None:
         "manager": scripts_dir / "verl_completion_likelihood_reward_manager.py",
         "extensions": scripts_dir / "verl_lhm_extensions.py",
         "sample_uid_patch": scripts_dir / "patch_verl_sample_uid.py",
+        "policy_contract": scripts_dir / "policy_contract.py",
+        "token_mean_patch": scripts_dir / "patch_verl_token_mean.py",
     }
     # Accept the repository layout while preserving the original flat bundle
     # layout used by frozen server manifests.
@@ -585,6 +595,8 @@ def main() -> None:
             "manager": package_root / "rewards" / "verl_completion_likelihood_reward_manager.py",
             "extensions": package_root / "rl" / "verl_lhm_extensions.py",
             "sample_uid_patch": package_root / "rl" / "patch_verl_sample_uid.py",
+            "policy_contract": package_root / "rl" / "policy_contract.py",
+            "token_mean_patch": package_root / "rl" / "patch_verl_token_mean.py",
         }
     missing = [str(path) for path in required.values() if not path.is_file()]
     if missing:
@@ -628,6 +640,11 @@ def main() -> None:
         if not isinstance(visual_z, list) or not visual_z:
             raise RuntimeError(f"{args.variant} requires extracted visual_z in {train_file}")
 
+    if not args.config_only and output_dir.exists() and (
+        any(output_dir.glob("global_step_*")) or (output_dir / "baseline_reward.json").exists()
+        or (output_dir / "curriculum_state.json").exists()
+    ):
+        raise RuntimeError("Use a fresh run directory: independent EMA files are not checkpoint-synchronized")
     output_dir.mkdir(parents=True, exist_ok=True)
     train_rows = count_rows(train_file)
     train_batch = 4
@@ -718,7 +735,7 @@ def main() -> None:
         "trainer.nnodes=1",
         f"trainer.save_freq={save_freq}",
         "trainer.test_freq=-1",
-        "trainer.resume_mode=auto",
+        "trainer.resume_mode=disable",
         f"trainer.total_epochs={epochs}",
         "trainer.max_actor_ckpt_to_keep=2",
         f"trainer.default_local_dir={output_dir}",
@@ -770,6 +787,8 @@ def main() -> None:
                 "+data.sampler.vq_reward_init=0.0",
             ]
         )
+    overrides = [item for item in overrides if item.split("=", 1)[0] not in POLICY_OVERRIDES]
+    overrides.extend(f"{key}={value}" for key, value in POLICY_OVERRIDES.items())
     command = [sys.executable, str(required["launcher"]), *overrides]
     extension_pythonpath = str(required["extensions"].parent)
     if os.environ.get("PYTHONPATH"):
@@ -782,7 +801,9 @@ def main() -> None:
     runtime_environment = {
         "RL_LHM_REWARD_MODE": config["reward"],
         "RL_LHM_UID_AUDIT_PATH": str(output_dir / "sample_uid_runtime_audit.json"),
+        "RL_LHM_POLICY_AUDIT_PATH": str(output_dir / "policy_runtime_audit.json"),
         "PYTHONPATH": extension_pythonpath,
+        "RL_LHM_RISK_PROFILE": "",  # clear any inherited candidate profile
         "RL_LHM_RISK_MATRIX_MODE": args.risk_matrix_mode,
         "RL_LHM_RISK_MATRIX_SCALE": str(args.risk_matrix_scale),
         "PYTHONHASHSEED": str(args.seed),
@@ -801,7 +822,20 @@ def main() -> None:
     }
     if single_gpu_cpu_offload:
         runtime_environment["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+    if args.risk_profile:
+        from training.rars_joint_grid import validate_profile
+        profile_path = args.risk_profile.resolve()
+        validate_profile(json.loads(profile_path.read_text(encoding="utf-8")))
+        if args.risk_matrix_mode != "ordinal" or args.risk_matrix_scale != 1.0 or risk_freeze_path or risk_control_path:
+            raise RuntimeError("Explicit pair weights cannot be combined with another risk control")
+        runtime_environment["RL_LHM_RISK_PROFILE"] = str(profile_path)
+    # Reward workers must receive the same candidate and reward settings.
+    for key, value in runtime_environment.items():
+        if key.startswith("RL_LHM_"):
+            command.append("++ray_kwargs.ray_init.runtime_env.env_vars." + key + "=" + json.dumps(value))
     manifest = {
+        "risk_profile": None if not args.risk_profile else str(profile_path),
+        "risk_profile_sha256": None if not args.risk_profile else sha256_file(profile_path),
         "variant": args.variant,
         "experiment_label": experiment_label,
         "components": config,
@@ -887,13 +921,10 @@ def main() -> None:
             "runtime_audit": str(output_dir / "sample_uid_runtime_audit.json") if config["shae"] else None,
         },
         "policy_objective_verification": {
-            "status": "unverified_external_runtime",
-            "description": (
-                "The policy_objective field records the existing carrier declaration. "
-                "This launcher does not pin or inspect the external VeRL policy-loss "
-                "implementation; compatibility with the manuscript policy-loss conventions "
-                "has not been established."
-            ),
+            "status": "runtime_verification_required_before_training",
+            "explicit_overrides": POLICY_OVERRIDES,
+            "runtime_audit": str(output_dir / "policy_runtime_audit.json"),
+            "historical_training_verified": False,
         },
         "configuration_only": args.config_only,
         "code_files": [
@@ -953,10 +984,21 @@ def main() -> None:
                     "dacvq_reward_seen_sum": sum(float(value) for value in reward_seen),
                 }
             )
+        final_checkpoint = None
+        if not args.smoke:
+            latest = output_dir / "latest_checkpointed_iteration.txt"
+            expected_step = steps_per_epoch * epochs
+            if not latest.is_file() or int(latest.read_text().strip()) != expected_step:
+                raise RuntimeError("Training exited without the expected final-epoch checkpoint")
+            final_checkpoint = f"global_step_{expected_step}"
+            if not (output_dir / final_checkpoint / "actor").is_dir():
+                raise RuntimeError("Final-epoch actor checkpoint is missing")
         atomic_write_json(
             output_dir / "training_complete.json",
             {
                 "status": "training_complete",
+                "run_manifest_sha256": sha256_file(manifest_path),
+                "final_checkpoint": final_checkpoint,
                 "created_utc": datetime.now(timezone.utc).isoformat(),
                 "variant": args.variant,
                 "experiment_label": experiment_label,

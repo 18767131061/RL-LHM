@@ -3,6 +3,7 @@ import math
 import os
 import sys
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -36,7 +37,7 @@ REWARD_CLIP_MAX = 3.0
 # freeze, status "frozen_selected_risk_matrix_for_primary_full_rl"). These are
 # the operative weights for the primary Full RL-LHM configuration and match
 # rewards/rars.py (default_matrix) and the
-# paper's Table of frozen RARS error-pair weights. The coordinate scan
+# paper's Table of frozen RARS error-pair weights. The joint grid
 # operates on unordered error pairs, so every matrix is symmetric; pairs not
 # listed individually take the shared "other" weight 0.40. The mode name
 # "ordinal" is retained only for scheduler/freeze contract compatibility.
@@ -333,11 +334,27 @@ def get_setting(data_mode: str):
     return CLASSES_5CLS
 
 
+@lru_cache(maxsize=4)
+def _explicit_risk_profile(path: str):
+    from training.rars_joint_grid import validate_profile
+    return validate_profile(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
 def get_risk_severity(pred_label: str, true_label: str, data_mode: str, matrix_mode: str) -> float:
     if pred_label == true_label or matrix_mode == "zero":
         return 0.0
     if matrix_mode == "uniform":
         return 1.0
+    profile_path = os.environ.get("RL_LHM_RISK_PROFILE")
+    if profile_path:
+        profile = _explicit_risk_profile(profile_path)
+        expected = "private" if data_mode == "private" else "public"
+        if profile["cohort"] != expected:
+            raise RuntimeError("Risk profile cohort differs from reward data_mode")
+        for pair, weight in profile["pair_weights"].items():
+            if set(pair.split("--")) == {pred_label, true_label}:
+                return float(weight)
+        return float(profile["other_weight"])
     matrix = RISK_SEVERITY_MATRIX_PRIVATE if data_mode == "private" else RISK_SEVERITY_MATRIX_MCT
     return float(matrix.get(true_label, {}).get(pred_label, 0.0))
 

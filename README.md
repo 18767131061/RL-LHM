@@ -101,3 +101,14 @@ The clinical datasets and trained weights are not redistributed. Researchers mus
 ## Citation and license
 
 Please cite the RL-LHM paper and see `CITATION.cff` for machine-readable citation metadata. The code written for this repository is released under the MIT License in `LICENSE`. Dependencies are installed separately and remain under their respective upstream licenses; they are not redistributed here.
+
+### Current joint-grid and policy interfaces
+
+The [joint-grid runner](docs/rars_joint_search.md) enumerates all four/six
+independent unordered pair weights, dispatches candidate/seed runs, scores only
+identified validation outputs, and refuses an exhaustive freeze until every
+candidate has all five seed scores. The current [training contract](docs/training_pipeline.md)
+fixes token-level PPO clipping and one global masked token denominator for both
+policy and KL losses, with version-restricted VeRL patches. Synthetic CPU checks
+are not historical search or training reproduction. The SFT visual-feature
+extraction recipe remains an external requirement.

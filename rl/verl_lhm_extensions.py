@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 from collections import defaultdict
@@ -17,7 +18,7 @@ from verl.experimental.dataset.sampler import AbstractCurriculumSampler
 
 
 EPS = 1e-6
-STATE_FORMAT_VERSION = 1
+STATE_FORMAT_VERSION = 2
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -50,20 +51,17 @@ def _to_path(path_like: Any) -> Optional[Path]:
 
 
 def _safe_float_list(values: Any) -> Optional[torch.Tensor]:
-    if values is None:
-        return None
-    if isinstance(values, torch.Tensor):
-        if values.numel() == 0:
-            return None
-        return values.detach().float().cpu().view(-1)
-    if not isinstance(values, (list, tuple)):
-        return None
-    if len(values) == 0:
+    if values is None or (isinstance(values, (list, tuple)) and not values):
         return None
     try:
-        return torch.tensor([float(v) for v in values], dtype=torch.float32)
-    except Exception:
+        vector = torch.as_tensor(values, dtype=torch.float32).detach().cpu().view(-1)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Invalid cached visual_z") from error
+    if vector.numel() == 0:
         return None
+    if not torch.isfinite(vector).all() or vector.norm().item() <= 0:
+        raise ValueError("Cached visual_z must be finite and nonzero")
+    return vector
 
 
 def _group_positions(index: Iterable[Any]) -> Dict[str, List[int]]:
@@ -116,9 +114,10 @@ class ShaeBaselineStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except Exception:
-            self._loaded = True
-            return
+        except Exception as error:
+            raise ValueError(f"Unreadable SHAE state: {self.path}") from error
+        if not isinstance(raw, dict):
+            raise ValueError("SHAE state must be an object")
         if isinstance(raw, dict):
             for key, value in raw.items():
                 if isinstance(value, dict):
@@ -127,6 +126,8 @@ class ShaeBaselineStore:
                 else:
                     ema = float(value)
                     seen = 1
+                if not math.isfinite(ema) or seen < 0:
+                    raise ValueError("SHAE state has non-finite EMA or invalid count")
                 self.entries[str(key)] = {"ema": ema, "seen": seen}
         self._loaded = True
 
@@ -179,6 +180,10 @@ def compute_shae_advantage(
     *,
     sample_index: np.ndarray,
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if token_level_rewards.shape != response_mask.shape or not torch.isfinite(token_level_rewards).all() or not torch.isfinite(response_mask).all():
+        raise ValueError("Rewards/mask must have matching shapes and finite values")
+    if not torch.all((response_mask == 0) | (response_mask == 1)):
+        raise ValueError("response_mask must be binary")
     scores = token_level_rewards.sum(dim=-1).float()
     response_mask = response_mask.float()
 
@@ -407,6 +412,10 @@ class DACVQState:
                 f"configured=({self.max_codes}, {self.input_dim})"
             )
 
+        for key in ("feat_decay", "reward_decay", "difficulty_beta", "dead_code_thresh",
+                    "dead_code_replace_prob", "reward_init", "revival_noise_std"):
+            if state.get(key) != getattr(self, key):
+                raise ValueError(f"DA-CVQ state/config changed: {key}")
         tensors = {
             "embedding": torch.tensor(state["embedding"], dtype=torch.float32),
             "ema_cluster_size": torch.tensor(state["ema_cluster_size"], dtype=torch.float32),
@@ -469,6 +478,7 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
         self.uid_to_pos: Dict[str, int] = {}
 
         input_dim = int(sampler_cfg.get("vq_input_dim", 1152))
+        vector_dims = set()
         for pos in range(len(self.data_source)):
             row = self.data_source[pos]
             sample_key, z = self._extract_row_info(row=row, fallback_pos=pos)
@@ -478,7 +488,14 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
             self.sample_vectors.append(z)
             self.uid_to_pos[sample_key] = pos
             if z is not None:
+                vector_dims.add(int(z.numel()))
                 input_dim = int(z.numel())
+        if len(vector_dims) > 1:
+            raise ValueError("Cached visual_z dimensions differ within the dataset")
+        self.dataset_signature = hashlib.sha256(json.dumps([
+            [key, None if vec is None else vec.tolist()]
+            for key, vec in zip(self.sample_keys, self.sample_vectors)
+        ], separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
         self.vq = DACVQState(
             max_codes=int(sampler_cfg.get("vq_code_capacity", sampler_cfg.get("vq_num_codes", 64))),
@@ -516,6 +533,7 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
         return {
             "format_version": STATE_FORMAT_VERSION,
             "dataset_size": len(self.data_source),
+            "dataset_signature": self.dataset_signature,
             "seed": self.seed,
             "update_count": self.update_count,
             "epoch_count": self.epoch_count,
@@ -532,6 +550,8 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
             )
         if int(state.get("seed", self.seed)) != self.seed:
             raise ValueError(f"Sampler seed changed: {state.get('seed')} != {self.seed}")
+        if state.get("dataset_signature") != self.dataset_signature:
+            raise ValueError("Sampler dataset identities/order/feature cache changed")
         self.vq.load_state_dict(state["vq"])
         self.update_count = int(state.get("update_count", 0))
         self.epoch_count = int(state.get("epoch_count", 0))
@@ -578,6 +598,8 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
         if "token_level_scores" not in batch.batch:
             return
         rewards = batch.batch["token_level_scores"].sum(dim=-1).detach().float().cpu()
+        if not torch.isfinite(rewards).all():
+            raise ValueError("Curriculum rewards must be finite")
         sample_keys = persistent_sample_keys(batch.non_tensor_batch, len(rewards))
         if "uid" not in batch.non_tensor_batch:
             raise ValueError("RL-LHM requires per-visit rollout uid for curriculum updates")

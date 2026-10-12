@@ -14,7 +14,7 @@ from verl.utils.reward_score import default_compute_score
 
 def completion_likelihood(log_probs: torch.Tensor, valid_length: int) -> tuple[float, float]:
     values = log_probs.reshape(-1)[:valid_length].detach().float()
-    if values.numel() == 0 or not torch.isfinite(values).all():
+    if valid_length <= 0 or values.numel() != valid_length or not torch.isfinite(values).all():
         raise RuntimeError("Valid generated-token rollout log probabilities are required")
     nll = float((-values.mean()).item())
     if not math.isfinite(nll):
@@ -38,6 +38,8 @@ def extract_generated_tokens_and_log_probs(batch) -> tuple[torch.Tensor, torch.T
     response_length = int(response_ids.numel())
     if response_length <= 0 or attention_mask.numel() < response_length:
         raise RuntimeError("attention_mask does not contain the generated response span")
+    if not torch.isfinite(attention_mask).all() or not torch.all((attention_mask == 0) | (attention_mask == 1)):
+        raise RuntimeError("attention_mask must be finite and binary")
     response_mask = attention_mask[-response_length:].to(dtype=torch.bool)
     valid_response_ids = response_ids[response_mask]
     if valid_response_ids.numel() <= 0:
@@ -133,6 +135,8 @@ class CompletionLikelihoodRewardManager(RewardManagerBase):
         else:
             score = float(result)
             reward_extra_info["score"] = score
+        if not math.isfinite(score):
+            raise RuntimeError("Reward callback returned a non-finite score")
         reward_extra_info["completion_nll"] = completion_nll
         reward_extra_info["seq_confidence"] = seq_confidence
         return {"reward_score": score, "reward_extra_info": reward_extra_info}

@@ -21,14 +21,19 @@ def extract_valid_rollout_log_probabilities(
     attention_mask: torch.Tensor,
     rollout_log_probabilities: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    response_ids = torch.as_tensor(responses).squeeze()
-    mask = torch.as_tensor(attention_mask).squeeze()
-    log_probabilities = torch.as_tensor(rollout_log_probabilities).squeeze()
+    def single_sequence(value):
+        tensor = torch.as_tensor(value)
+        return tensor.squeeze(0) if tensor.ndim == 2 and tensor.shape[0] == 1 else tensor
+    response_ids = single_sequence(responses)
+    mask = single_sequence(attention_mask)
+    log_probabilities = single_sequence(rollout_log_probabilities)
     if response_ids.ndim != 1 or mask.ndim != 1 or log_probabilities.ndim != 1:
         raise ValueError("responses, mask, and rollout log probabilities must be one-dimensional")
     response_length = int(response_ids.numel())
     if response_length <= 0 or mask.numel() < response_length:
         raise ValueError("attention mask does not contain the response span")
+    if not torch.isfinite(mask).all() or not torch.all((mask == 0) | (mask == 1)):
+        raise ValueError("attention mask must be finite and binary")
     response_mask = mask[-response_length:].to(dtype=torch.bool)
     valid_ids = response_ids[response_mask]
     if log_probabilities.numel() == response_length:

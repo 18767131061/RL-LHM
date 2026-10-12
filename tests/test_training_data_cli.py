@@ -234,8 +234,9 @@ class TrainingDataCliTests(unittest.TestCase):
                     "trainer.val_before_train=False",
                 ):
                     self.assertIn(fixed, command)
+                self.assertEqual(manifest["runtime_environment"]["RL_LHM_RISK_PROFILE"], "")
                 self.assertTrue(manifest["configuration_only"])
-                self.assertEqual(manifest["policy_objective_verification"]["status"], "unverified_external_runtime")
+                self.assertEqual(manifest["policy_objective_verification"]["status"], "runtime_verification_required_before_training")
                 self.assertIsNone(manifest["validation_file"])
                 self.assertEqual(manifest["validation_usage"]["data_val_files_role"], "training_file_placeholder_not_held_out_validation")
                 seen.add(factors)

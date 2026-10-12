@@ -6,4 +6,6 @@ matplotlib>=3.8
 tqdm>=4.66
 qwen-vl-utils>=0.0.10
 omegaconf>=2.3
-# VeRL/vLLM/Ray versions must match the upstream runtime used for the paper.
+# Current supported VeRL source: fc3a5acae155425909bc30c982c3cea0784ce3c2 plus
+# the three documented RL-LHM patches. vLLM/Ray/Transformers GPU compatibility
+# must be validated in the deployment environment. Historical versions are not inferred.

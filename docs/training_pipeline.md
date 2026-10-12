@@ -81,7 +81,7 @@ Even in `--config-only` mode, the training file must exist and contain at least 
 
 `--validation-file` is optional and binds the supplied path and hash in the manifest. It must differ from the training path; the launcher does not inspect patient identities, so use the converter's split checks or an equivalent check for other inputs. The launcher retains `trainer.val_before_train=False` and `trainer.test_freq=-1`, so merely supplying this file does not enable validation or model selection. Without the option, the existing `data.val_files` placeholder points to the training file and the manifest explicitly marks it as not held-out validation.
 
-Remove `--config-only` to start training in a prepared GPU environment. Curriculum-enabled variants require extracted `extra_info.visual_z`; this converter leaves it `null`. The current launcher checks the first training record before starting those variants. For the reported protocol, each seed uses features extracted once from its own SFT checkpoint and held fixed during RL. The extractor checkpoint interface, layer, pooling and phase-fusion recipe are not bundled here. Supply the matching extraction pipeline and complete per-record vectors before a real run. GPU `--smoke` runs use one step without curriculum or two with curriculum so the second epoch can consume learned sampling state. Neither configuration generation nor a smoke run establishes the full training result.
+Remove `--config-only` to start training in a prepared GPU environment. Curriculum-enabled variants require extracted `extra_info.visual_z`; this converter leaves it `null`. The launcher checks the first record before launch; sampler initialization validates all supplied vectors for finite, nonzero and consistent-dimensional values. Missing vectors follow the explicitly documented sampler fallback. A grid search requires a complete feature cache for every seed. For the reported protocol, each seed uses features extracted once from its own SFT checkpoint and held fixed during RL. The extractor checkpoint interface, layer, pooling and phase-fusion recipe are not bundled here. Supply the matching extraction pipeline and complete per-record vectors before a real run. GPU `--smoke` runs use one step without curriculum or two with curriculum so the second epoch can consume learned sampling state. Neither configuration generation nor a smoke run establishes the full training result.
 
 ## Persistent input identity and rollout groups
 
@@ -122,9 +122,46 @@ reconstruct past EMA or curriculum updates that were missed because of transient
 identifiers. Historical results require a separate check against their actual
 runtime; new runs should use the corrected identity path from initialization.
 
-## External policy-loss boundary
+## Explicit token-level policy and runtime checks
 
-The launcher delegates policy optimization to VeRL and does not install a policy-loss patch. At the integration reference below, the default vanilla carrier uses token-level importance ratios with log-difference bounds `[-20, 20]`, PPO clipping at `0.20`, negative-advantage dual clipping with `c=3.0`, and masked token-mean aggregation. The launcher enables the low-variance KL term with coefficient `0.01`. These are separate from completion-average NLL in reward scoring and inference. The manifest records the declared objective, while external-runtime verification remains unverified: a configuration-only run does not inspect the installed loss or establish which version produced historical results. Use the matching carrier version and configuration for a run.
+The current launcher fixes `policy_loss.loss_mode=vanilla`,
+`loss_agg_mode=token-mean`, lower/upper PPO clipping `0.20`, negative-advantage
+dual clipping `3.0`, low-variance KL `0.01`, gradient clipping `1.0`, one PPO
+epoch, the legacy FSDP worker and sequence-parallel size one. Rollout correction
+weights and reward-side KL are disabled. The exact vanilla-loss and KL source
+functions at VeRL commit `fc3a5acae155425909bc30c982c3cea0784ce3c2` are checked
+before training. The source fixes log-ratio bounds `[-20,20]` and the low-variance
+KL numerical bounds; `rl/policy_contract.py` records this contract.
+
+The reference FSDP actor averages microbatch token means. With unequal response
+lengths this is not the token mean over the complete optimizer minibatch. Apply
+this additional version-restricted patch to the selected VeRL installation:
+
+```bash
+python rl/patch_verl_token_mean.py \
+  --dp-actor /path/to/verl/workers/actor/dp_actor.py \
+  --audit ./outputs/token_mean_patch.json
+```
+
+The patch counts retained tokens over the entire distributed PPO minibatch once.
+Policy and KL numerators use that same denominator. The data-parallel size
+compensates for FSDP gradient averaging; microbatch gradients are summed without
+a second microbatch-count division. It rejects unknown source and is idempotent.
+The launcher requires the patch and writes `policy_runtime_audit.json`, including
+the explicit overrides and source hashes, before entering VeRL. `--config-only`
+records the required configuration but does not perform that runtime check.
+
+These checks establish the current supported code path, not the version used for
+historical experiments or compatibility of an arbitrary external GPU stack.
+Pin the full VeRL checkout at the stated commit and record the installed Torch,
+Ray, vLLM and Transformers versions for each real deployment.
+
+Independent SHAE state files are not atomically synchronized to VeRL actor
+checkpoints. The current launcher therefore starts fresh (`resume_mode=disable`)
+and refuses directories containing prior actor or EMA state. The joint-grid
+runner retains interrupted run directories and restarts that unfinished seed
+from its SFT model; completed candidate/seed tasks are reused without retraining.
+This is search-task recovery, not a claim of exact mid-training checkpoint resume.
 
 ## CPU entry-point checks
 
@@ -162,3 +199,7 @@ against the installed reward-loop runtime before training.
 Deploy this complete package, including `evaluation/schema.py`, with the reward
 callback. Copying only the reward file into an unrelated flat directory omits
 its shared strict parser dependency.
+
+## Joint weight selection
+
+See [rars_joint_search.md](rars_joint_search.md) for the full joint-grid task, validation, recovery and freeze interfaces. The independent single-axis sensitivity protocol is not a joint-search substitute.

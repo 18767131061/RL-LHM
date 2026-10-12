@@ -1,19 +1,51 @@
 {
   "cohort": "private",
-  "labels": ["HCC", "ICC", "FNH", "HA_Hemangioma", "nodule_CYST"],
-  "parameter_pair": ["HCC->ICC", "HCC->FNH"],
-  "reviewed_parameter_values": {
-    "HCC->ICC": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5],
-    "HCC->FNH": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5]
+  "protocol": "main",
+  "split_id": "P1",
+  "seeds": [
+    42,
+    2026,
+    3407,
+    1234,
+    5678
+  ],
+  "values": [
+    0.1,
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.7,
+    0.8,
+    0.9,
+    1.0,
+    1.1,
+    1.2,
+    1.3,
+    1.4,
+    1.5
+  ],
+  "selection_split": "validation",
+  "formal_test_used_for_selection": false,
+  "synthetic_test": false,
+  "train_file": "/path/to/train_seed42.jsonl",
+  "validation_manifest": "/path/to/P1_validation_manifest.json",
+  "test_identity_manifest": "/path/to/reserved_test_identities.json",
+  "seed_model_paths": {
+    "42": "/path/to/sft_seed42",
+    "2026": "/path/to/sft_seed2026",
+    "3407": "/path/to/sft_seed3407",
+    "1234": "/path/to/sft_seed1234",
+    "5678": "/path/to/sft_seed5678"
   },
-  "fixed_pair_weights": {
-    "HCC->HA_Hemangioma": 0.5,
-    "ICC->HA_Hemangioma": 0.7
+  "seed_train_files": {
+    "42": "/path/to/train_seed42.jsonl",
+    "2026": "/path/to/train_seed2026.jsonl",
+    "3407": "/path/to/train_seed3407.jsonl",
+    "1234": "/path/to/train_seed1234.jsonl",
+    "5678": "/path/to/train_seed5678.jsonl"
   },
-  "shared_other_values": [0.4],
-  "selection_seed": 2026,
-  "selection_partition": "development_tuning",
-  "development_manifest": "${RL_LHM_RARS_DEVELOPMENT_MANIFEST}",
-  "freeze_output": "${RL_LHM_RARS_FREEZE_JSON}",
-  "formal_test_used_for_selection": false
+  "output_root": "/path/to/joint_grid_runs",
+  "n_gpus": 4
 }
