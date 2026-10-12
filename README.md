@@ -48,7 +48,7 @@ python training/run_verl_lhm_variant.py \
   --config-only
 ```
 
-Use `--smoke` or `--formal-single-gpu` only when the hardware and experiment protocol allow it. The launcher does not download data or weights. Configuration-only execution checks the generated configuration, not the external policy loss or a GPU training run. The eight component combinations and data-preparation options are documented in `docs/training_pipeline.md`.
+Use `--smoke` or `--formal-single-gpu` only when the hardware and experiment protocol allow it. The launcher does not download data or weights. Configuration-only execution checks the generated configuration, not the external policy loss or a GPU training run. The eight component combinations, required stable sample identifiers, and explicit VeRL integration patches are documented in `docs/training_pipeline.md`.
 
 ## Inference
 
@@ -92,7 +92,7 @@ Run the full test suite after installing its optional dependencies:
 ./scripts/run_required_tests.sh
 ```
 
-The full test script includes optional PyTorch-dependent tests. The CPU-only contract tests can be run separately with `./scripts/run_required_tests.sh --cpu-only`. Tests cover deterministic matching, IoU, classification, patient aggregation, RARS weighting, strict parsing at the actual reward entry point, and the evaluation and configuration CLIs. Full training and inference require approved medical data, model weights, CUDA, and a compatible VeRL runtime. Passing synthetic and CPU contract tests does not establish reproduction of reported numerical results.
+The full test script includes tests requiring PyTorch and OmegaConf from `requirements-optional.txt`. The CPU-only contract tests can be run separately with `./scripts/run_required_tests.sh --cpu-only`. Tests cover deterministic matching, IoU, classification, patient aggregation, RARS weighting, strict parsing at the actual reward entry point, and the evaluation and configuration CLIs. Full training and inference require approved medical data, model weights, CUDA, and a compatible VeRL runtime. Passing synthetic and CPU contract tests does not establish reproduction of reported numerical results.
 
 ## Data availability
 

@@ -29,7 +29,7 @@ The default outputs are:
 
 The converter rejects overlap in either supplied `patient_id` or `statistical_patient_id`, duplicate input-group UIDs, empty training sources, and explicitly supplied empty validation sources. It preserves the caller's source partition; it does not establish how that partition was created.
 
-For this converter, `class_counts` counts **positive three-phase input groups by `gt_major`**, not patients or individual lesion records. `gt_major` is the most frequent active lesion-record label in a group; equal counts use the lexical maximum label. Background groups and zero-count classes are omitted. The default training, validation, and monitor files all carry counts derived only from the supplied training source. The metadata documents this conversion policy; it does not establish the original experiments' counting population or unit.
+For this converter, `class_counts` counts **positive three-phase input groups by `gt_major`**, not patients or individual lesion records. `gt_major` is the most frequent active lesion-record label in a group; equal counts use the lexical maximum label. Background groups and zero-count classes are omitted. The default training, validation, and monitor files all carry counts derived only from the supplied training source. The metadata documents this conversion policy; it does not establish the original cohort-specific dictionary values or their source split.
 
 To explicitly prepare a combined training/validation refit dataset after model selection:
 
@@ -81,11 +81,50 @@ Even in `--config-only` mode, the training file must exist and contain at least 
 
 `--validation-file` is optional and binds the supplied path and hash in the manifest. It must differ from the training path; the launcher does not inspect patient identities, so use the converter's split checks or an equivalent check for other inputs. The launcher retains `trainer.val_before_train=False` and `trainer.test_freq=-1`, so merely supplying this file does not enable validation or model selection. Without the option, the existing `data.val_files` placeholder points to the training file and the manifest explicitly marks it as not held-out validation.
 
-Remove `--config-only` to start training in a prepared GPU environment. Curriculum-enabled variants require extracted `extra_info.visual_z`; this converter leaves it `null`. The current launcher checks the first training record before starting those variants. Supply a consistent, documented extraction pipeline and complete per-record vectors before a real run. GPU `--smoke` runs use one step without curriculum or two with curriculum so the second epoch can consume learned sampling state. Neither configuration generation nor a smoke run establishes the full training result.
+Remove `--config-only` to start training in a prepared GPU environment. Curriculum-enabled variants require extracted `extra_info.visual_z`; this converter leaves it `null`. The current launcher checks the first training record before starting those variants. For the reported protocol, each seed uses features extracted once from its own SFT checkpoint and held fixed during RL. The extractor checkpoint interface, layer, pooling and phase-fusion recipe are not bundled here. Supply the matching extraction pipeline and complete per-record vectors before a real run. GPU `--smoke` runs use one step without curriculum or two with curriculum so the second epoch can consume learned sampling state. Neither configuration generation nor a smoke run establishes the full training result.
+
+## Persistent input identity and rollout groups
+
+Every training row used by SHAE or DA-CVQ/VGS must provide a nonempty
+`extra_info.sample_uid` that uniquely identifies that input record across visits
+and epochs. Dataset rows must have distinct persistent keys. VeRL's `uid` remains
+the identifier for one sampled occurrence and its `G` completions. Sampling the
+same input twice must produce two rollout groups, each with its own statistics.
+
+SHAE groups by `uid` and reads/writes its EMA under `extra_info.sample_uid`.
+DA-CVQ/VGS uses the same persistent key to look up the dataset vector and consumes
+one mean reward per rollout group. Repeated visits are processed in their order
+of first appearance in the current batch; their groups are never pooled. Missing
+or inconsistent identity metadata, unknown sampler keys, and duplicate dataset
+keys raise an error instead of silently disabling memory updates.
+
+Apply the following additional bridge in the same separately selected VeRL
+checkout as the reward-loop patch below:
+
+```bash
+python rl/patch_verl_sample_uid.py \
+  --ray-trainer /path/to/verl/trainer/ppo/ray_trainer.py \
+  --audit ./outputs/sample_uid_patch.json
+```
+
+The bridge supports the exact `compute_advantage` function at VeRL commit
+`fc3a5acae155425909bc30c982c3cea0784ce3c2`. It adds the persistent key only to the
+SHAE dispatch, preserves upstream rollout `uid` generation, and leaves GRPO and
+policy losses unchanged. It backs up the selected file, is idempotent, and rejects
+unrecognized source. SHAE-enabled launches verify the bridge before starting and
+write `sample_uid_runtime_audit.json`; configuration-only mode does not perform
+this runtime check. The launcher also passes the extension import path into Ray
+workers. Deploy the same code and patched VeRL installation to every participating
+node.
+
+This correction affects training state. Continuing an old checkpoint does not
+reconstruct past EMA or curriculum updates that were missed because of transient
+identifiers. Historical results require a separate check against their actual
+runtime; new runs should use the corrected identity path from initialization.
 
 ## External policy-loss boundary
 
-The launcher leaves the existing VeRL policy-loss path unchanged. Its manifest retains the carrier's declared token-level clipped PPO/GRPO description and separately marks external-runtime verification as unverified. The launcher neither pins nor inspects the upstream loss implementation; a generated manifest does not establish equivalence to the manuscript's completion-level importance ratio. That question requires the actual training runtime, version, configuration, and loss implementation.
+The launcher delegates policy optimization to VeRL and does not install a policy-loss patch. At the integration reference below, the default vanilla carrier uses token-level importance ratios with log-difference bounds `[-20, 20]`, PPO clipping at `0.20`, negative-advantage dual clipping with `c=3.0`, and masked token-mean aggregation. The launcher enables the low-variance KL term with coefficient `0.01`. These are separate from completion-average NLL in reward scoring and inference. The manifest records the declared objective, while external-runtime verification remains unverified: a configuration-only run does not inspect the installed loss or establish which version produced historical results. Use the matching carrier version and configuration for a run.
 
 ## CPU entry-point checks
 

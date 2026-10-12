@@ -138,6 +138,9 @@ class TrainingDataCliTests(unittest.TestCase):
         manifest = json.loads((output / "run_manifest.json").read_text())
         self.assertEqual(json.loads(result.stdout), manifest)
         self.assertFalse((output / "training_complete.json").exists())
+        self.assertEqual(manifest["sample_identity_contract"]["persistent_sample_key"], "extra_info.sample_uid")
+        self.assertTrue(any(arg.startswith("++ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH=")
+                            for arg in manifest["command"]))
         return manifest
 
     def test_default_conversion_preserves_validation_and_train_only_counts(self):

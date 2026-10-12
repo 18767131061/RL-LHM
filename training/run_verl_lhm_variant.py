@@ -34,6 +34,7 @@ REQUIRED_RISK_SCRIPTS = (
     "verl_liver_reward.py",
     "verl_completion_likelihood_reward_manager.py",
     "verl_lhm_extensions.py",
+    "patch_verl_sample_uid.py",
 )
 POST_PRIMARY_RISK_CONTROLS = {
     "author_nominal_control",
@@ -572,6 +573,7 @@ def main() -> None:
         "reward": scripts_dir / "verl_liver_reward.py",
         "manager": scripts_dir / "verl_completion_likelihood_reward_manager.py",
         "extensions": scripts_dir / "verl_lhm_extensions.py",
+        "sample_uid_patch": scripts_dir / "patch_verl_sample_uid.py",
     }
     # Accept the repository layout while preserving the original flat bundle
     # layout used by frozen server manifests.
@@ -582,6 +584,7 @@ def main() -> None:
             "reward": package_root / "rewards" / "verl_liver_reward.py",
             "manager": package_root / "rewards" / "verl_completion_likelihood_reward_manager.py",
             "extensions": package_root / "rl" / "verl_lhm_extensions.py",
+            "sample_uid_patch": package_root / "rl" / "patch_verl_sample_uid.py",
         }
     missing = [str(path) for path in required.values() if not path.is_file()]
     if missing:
@@ -768,8 +771,18 @@ def main() -> None:
             ]
         )
     command = [sys.executable, str(required["launcher"]), *overrides]
+    extension_pythonpath = str(required["extensions"].parent)
+    if os.environ.get("PYTHONPATH"):
+        extension_pythonpath += os.pathsep + os.environ["PYTHONPATH"]
+    # Explicit Ray job environment also covers workers attached to an existing
+    # local Ray service, which need not inherit this launcher's process env.
+    command.append(
+        "++ray_kwargs.ray_init.runtime_env.env_vars.PYTHONPATH=" + json.dumps(extension_pythonpath)
+    )
     runtime_environment = {
         "RL_LHM_REWARD_MODE": config["reward"],
+        "RL_LHM_UID_AUDIT_PATH": str(output_dir / "sample_uid_runtime_audit.json"),
+        "PYTHONPATH": extension_pythonpath,
         "RL_LHM_RISK_MATRIX_MODE": args.risk_matrix_mode,
         "RL_LHM_RISK_MATRIX_SCALE": str(args.risk_matrix_scale),
         "PYTHONHASHSEED": str(args.seed),
@@ -866,12 +879,19 @@ def main() -> None:
             None if risk_control is None else risk_control.get("control_parameter_values")
         ),
         "policy_objective": "VERL token-level clipped PPO/GRPO (vanilla policy loss, clip ratio 0.20)",
+        "sample_identity_contract": {
+            "rollout_group_key": "uid (per visit; unchanged from VeRL)",
+            "persistent_sample_key": "extra_info.sample_uid",
+            "repeated_sample_updates": "one EMA update per visit in first-occurrence batch order",
+            "shae_bridge_required": bool(config["shae"]),
+            "runtime_audit": str(output_dir / "sample_uid_runtime_audit.json") if config["shae"] else None,
+        },
         "policy_objective_verification": {
             "status": "unverified_external_runtime",
             "description": (
                 "The policy_objective field records the existing carrier declaration. "
                 "This launcher does not pin or inspect the external VeRL policy-loss "
-                "implementation; equivalence to the manuscript completion-level ratio "
+                "implementation; compatibility with the manuscript policy-loss conventions "
                 "has not been established."
             ),
         },

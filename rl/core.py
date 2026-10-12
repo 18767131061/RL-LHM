@@ -76,23 +76,39 @@ def compute_shae_advantage(
     response_mask: torch.Tensor,
     index: Sequence[object] | np.ndarray,
     *,
+    sample_index: Sequence[object] | np.ndarray | None = None,
     store: ShaeBaselineStore | None = None,
     gate_mid: float = 0.05,
     gate_temperature: float = 0.015,
     noise_std: float = 0.0,
     generator: torch.Generator | None = None,
 ) -> torch.Tensor:
-    """Mix within-group and EMA-baseline advantages using reward heterogeneity."""
+    """Mix per-visit advantages with a persistent per-sample EMA.
+
+    ``index`` identifies each rollout visit, while ``sample_index`` identifies
+    the persistent input. Callers using one visit per input can omit the latter.
+    Repeated visits update the EMA in first-occurrence batch order, each using
+    its own G responses; they never form one larger normalization group.
+    """
     if token_level_rewards.shape != response_mask.shape or token_level_rewards.ndim != 2:
         raise ValueError("rewards and response mask must have the same [batch, tokens] shape")
     if len(index) != token_level_rewards.shape[0]:
         raise ValueError("index length must equal batch size")
+    sample_index = index if sample_index is None else sample_index
+    if len(sample_index) != len(index):
+        raise ValueError("sample_index length must equal batch size")
+    groups = []
+    for visit_key, positions in _group_positions(index).items():
+        keys = {str(sample_index[position]) for position in positions}
+        if len(keys) != 1:
+            raise ValueError(f"Rollout group {visit_key!r} contains multiple sample keys")
+        groups.append((keys.pop(), positions))
     if gate_temperature <= 0.0 or noise_std < 0.0:
         raise ValueError("gate_temperature must be positive and noise_std non-negative")
     baseline_store = store or ShaeBaselineStore()
     scores = token_level_rewards.sum(dim=-1).float()
     outcome = torch.zeros_like(scores)
-    for sample_key, positions in _group_positions(index).items():
+    for sample_key, positions in groups:
         position_tensor = torch.tensor(positions, device=scores.device, dtype=torch.long)
         sample_scores = scores.index_select(0, position_tensor)
         mean = sample_scores.mean()

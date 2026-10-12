@@ -14,7 +14,6 @@ from omegaconf import DictConfig
 
 from verl import DataProto
 from verl.experimental.dataset.sampler import AbstractCurriculumSampler
-from verl.trainer.ppo.core_algos import register_adv_est
 
 
 EPS = 1e-6
@@ -72,6 +71,34 @@ def _group_positions(index: Iterable[Any]) -> Dict[str, List[int]]:
     for pos, key in enumerate(index):
         grouped[str(key)].append(pos)
     return grouped
+
+
+def persistent_sample_keys(non_tensor_batch: Dict[str, Any], size: int) -> np.ndarray:
+    """Read dataset identity, never the trainer's per-visit rollout ``uid``."""
+    extra_infos = non_tensor_batch.get("extra_info")
+    if extra_infos is None or len(extra_infos) != size:
+        raise ValueError("RL-LHM requires one extra_info.sample_uid per response")
+    keys = []
+    for pos, info in enumerate(extra_infos):
+        key = info.get("sample_uid") if isinstance(info, dict) else None
+        if key is None or not str(key).strip():
+            raise ValueError(f"Missing extra_info.sample_uid at response {pos}")
+        keys.append(str(key))
+    return np.asarray(keys, dtype=object)
+
+
+def _visit_groups(index: Iterable[Any], sample_index: Iterable[Any], size: int):
+    """Validate all groups before mutating state; retain first-occurrence order."""
+    index, sample_index = list(index), list(sample_index)
+    if len(index) != size or len(sample_index) != size:
+        raise ValueError("rollout uid and sample_uid lengths must equal batch size")
+    groups = []
+    for visit_key, positions in _group_positions(index).items():
+        keys = {str(sample_index[pos]) for pos in positions}
+        if len(keys) != 1:
+            raise ValueError(f"Rollout group {visit_key!r} contains multiple sample_uid values")
+        groups.append((keys.pop(), positions))
+    return groups
 
 
 class ShaeBaselineStore:
@@ -144,12 +171,13 @@ def _get_shae_store(config: Optional[DictConfig]) -> ShaeBaselineStore:
     return _SHAE_STORES[key]
 
 
-@register_adv_est("shae")
 def compute_shae_advantage(
     token_level_rewards: torch.Tensor,
     response_mask: torch.Tensor,
     index: np.ndarray,
     config: Optional[DictConfig] = None,
+    *,
+    sample_index: np.ndarray,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     scores = token_level_rewards.sum(dim=-1).float()
     response_mask = response_mask.float()
@@ -162,7 +190,10 @@ def compute_shae_advantage(
     store = _get_shae_store(config)
     outcome_adv = torch.zeros_like(scores)
 
-    for sample_key, positions in _group_positions(index).items():
+    # A sample can be drawn twice by replacement sampling. Normalize each visit's
+    # G responses independently, then update its persistent EMA once per visit,
+    # in first-occurrence order in this batch (including after batch balancing).
+    for sample_key, positions in _visit_groups(index, sample_index, len(scores)):
         pos_tensor = torch.tensor(positions, device=scores.device, dtype=torch.long)
         sample_scores = scores.index_select(0, pos_tensor)
         sample_mean = float(sample_scores.mean().item())
@@ -441,6 +472,8 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
         for pos in range(len(self.data_source)):
             row = self.data_source[pos]
             sample_key, z = self._extract_row_info(row=row, fallback_pos=pos)
+            if sample_key in self.uid_to_pos:
+                raise ValueError(f"Duplicate extra_info.sample_uid in curriculum dataset: {sample_key!r}")
             self.sample_keys.append(sample_key)
             self.sample_vectors.append(z)
             self.uid_to_pos[sample_key] = pos
@@ -470,7 +503,7 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
 
     def _extract_row_info(self, row: Dict[str, Any], fallback_pos: int) -> tuple[str, Optional[torch.Tensor]]:
         extra_info = row.get("extra_info") or {}
-        sample_key = str(row.get("uid") or extra_info.get("sample_uid") or extra_info.get("index") or fallback_pos)
+        sample_key = persistent_sample_keys({"extra_info": [extra_info]}, 1)[0]
         z = _safe_float_list(extra_info.get("visual_z"))
         return sample_key, z
 
@@ -545,23 +578,17 @@ class VLGSHybridSampler(AbstractCurriculumSampler):
         if "token_level_scores" not in batch.batch:
             return
         rewards = batch.batch["token_level_scores"].sum(dim=-1).detach().float().cpu()
-        if "uid" in batch.non_tensor_batch:
-            raw_keys = list(batch.non_tensor_batch["uid"])
-        else:
-            extra_infos = list(batch.non_tensor_batch.get("extra_info", []))
-            raw_keys = [
-                str((x or {}).get("sample_uid") or (x or {}).get("index") or idx) for idx, x in enumerate(extra_infos)
-            ]
-
-        grouped: Dict[str, List[int]] = defaultdict(list)
-        for pos, key in enumerate(raw_keys):
-            grouped[str(key)].append(pos)
+        sample_keys = persistent_sample_keys(batch.non_tensor_batch, len(rewards))
+        if "uid" not in batch.non_tensor_batch:
+            raise ValueError("RL-LHM requires per-visit rollout uid for curriculum updates")
+        grouped = _visit_groups(batch.non_tensor_batch["uid"], sample_keys, len(rewards))
+        unknown = {sample_key for sample_key, _ in grouped if sample_key not in self.uid_to_pos}
+        if unknown:
+            raise ValueError(f"Curriculum received sample_uid absent from its dataset: {sorted(unknown)}")
 
         updated = 0
-        for sample_key, positions in grouped.items():
-            dataset_pos = self.uid_to_pos.get(str(sample_key))
-            if dataset_pos is None:
-                continue
+        for sample_key, positions in grouped:
+            dataset_pos = self.uid_to_pos[sample_key]
             z = self.sample_vectors[dataset_pos]
             if z is None:
                 continue

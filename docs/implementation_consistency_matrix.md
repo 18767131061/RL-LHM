@@ -3,6 +3,7 @@
 | Concept | Code | CPU contract |
 | --- | --- | --- |
 | SHAE and DA-CVQ/VGS | `rl/core.py`, `rl/verl_lhm_extensions.py` | `tests/test_rl_core.py` |
+| Persistent sample identity and per-visit rollout groups | `rl/patch_verl_sample_uid.py`, `rl/verl_lhm_extensions.py`, `training/verl_lhm_launcher.py` | `tests/test_verl_sample_uid.py` (PyTorch; exact-reference integration when supplied) |
 | RARS | `rewards/rars.py` | `tests/test_rars_weights.py` |
 | Full reward and strict parsing | `rewards/full_reward.py`, `rewards/verl_liver_reward.py`, `evaluation/schema.py` | `tests/test_full_reward.py`, `tests/test_reward_schema_contract.py` |
 | 2D matching and Mean IoU | `matching/`, `evaluation/detection.py` | `tests/test_iou.py`, `tests/test_detection_metrics.py` |
