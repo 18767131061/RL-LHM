@@ -158,3 +158,171 @@ def test_class_count_metadata_is_copied_and_all_keys_contribute(outside_count, m
     assert reference['classification_reward'] == pytest.approx(expected)
     assert reference['reward_raw'] == pytest.approx(active['reward_raw'])
     assert metadata == original
+
+
+def _loco_reward_setup(tmp_path, monkeypatch, classes=None):
+    from training.rars_joint_grid import candidate
+    profile = candidate({'cohort': 'private', 'protocol': 'loco',
+                         'classes': list(classes or ('HCC', 'ICC', 'HA_Hemangioma', 'nodule_CYST')),
+                         'loco_pairs': [['HCC', 'ICC']], 'values': [.1]}, 0)
+    path = tmp_path / 'profile.json'
+    path.write_text(json.dumps(profile))
+    monkeypatch.setenv('RL_LHM_RISK_PROFILE', str(path))
+    monkeypatch.setenv('RL_LHM_REWARD_MODE', 'rars')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_MODE', 'ordinal')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_SCALE', '1.0')
+    return profile, path
+
+
+def _loco_reward_inputs(truth='ICC', prediction='HCC'):
+    gt = {'gt_dets': [{'phase': phase, 'label': truth, 'bbox': [0, 0, 10, 10]}
+                      for phase in ('a', 'p', 'v')]}
+    raw = json.dumps({'detections': [{'phase': phase, 'label': prediction, 'bbox_2d': [0, 0, 10, 10]}
+                                    for phase in ('a', 'p', 'v')]})
+    return gt, raw
+
+
+@pytest.mark.parametrize('extra_count', [None, 0, 7])
+def test_loco_four_class_reward_does_not_invent_fnh_count(tmp_path, monkeypatch, extra_count):
+    from rewards.verl_liver_reward import compute_score as active_reward, get_setting
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    profile, _ = _loco_reward_setup(tmp_path, monkeypatch)
+    counts = {label: 10 for label in profile['active_classes']}
+    if extra_count is not None:
+        counts['FNH'] = extra_count
+    metadata = {'data_mode': 'private', 'class_counts': counts, 'seq_confidence': .5}
+    before = copy.deepcopy(metadata)
+    gt, raw = _loco_reward_inputs()
+    active = active_reward(None, raw, gt, metadata)
+    reference = reference_reward(raw, gt, extra_info=metadata,
+        config=RewardConfig(data_mode='private_5class', risk_profile=profile))
+    expected = -((40 + (extra_count or 0)) / (10 + 1e-6)) ** .35 * math.exp(.5 * .1) * 1.375
+    assert get_setting('private') == profile['active_classes']
+    assert active['parse_ok'] == reference['parse_ok'] == 1
+    assert active['cls_score'] == pytest.approx(expected)
+    assert reference['classification_reward'] == pytest.approx(expected)
+    assert reference['reward_raw'] == pytest.approx(active['reward_raw'])
+    assert metadata == before
+
+
+def test_loco_counts_still_protect_missing_active_classes(tmp_path, monkeypatch):
+    from rewards.verl_liver_reward import compute_score as active_reward
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    profile, _ = _loco_reward_setup(tmp_path, monkeypatch)
+    metadata = {'data_mode': 'private', 'class_counts': {'HCC': 10, 'ICC': 2, 'nodule_CYST': 0, 'extra': 17}}
+    gt, raw = _loco_reward_inputs()
+    active = active_reward(None, raw, gt, metadata)
+    reference = reference_reward(raw, gt, extra_info=metadata,
+        config=RewardConfig(data_mode='private_5class', risk_profile=profile))
+    # The missing HH and zero NC each become one; no absent FNH entry is inserted.
+    expected = -(31 / (2 + 1e-6)) ** .35 * math.exp(.5 * .1)
+    assert active['cls_score'] == pytest.approx(expected)
+    assert reference['classification_reward'] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('side', ['prediction', 'truth'])
+def test_loco_schema_rejects_fnh_outside_active_classes(tmp_path, monkeypatch, side):
+    from rewards.verl_liver_reward import compute_score as active_reward
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    profile, _ = _loco_reward_setup(tmp_path, monkeypatch)
+    gt, raw = _loco_reward_inputs(**{side: 'FNH'})
+    metadata = {'data_mode': 'private', 'class_counts': {c: 10 for c in profile['active_classes']}}
+    assert active_reward(None, raw, gt, metadata)['parse_ok'] == 0
+    assert reference_reward(raw, gt, extra_info=metadata,
+        config=RewardConfig(data_mode='private_5class', risk_profile=profile))['parse_ok'] == 0
+
+
+@pytest.mark.parametrize('fault', ['cohort', 'empty', 'duplicate', 'outside', 'unordered', 'not_mapping'])
+def test_loco_invalid_profile_fails_before_correct_label_reward(tmp_path, monkeypatch, fault):
+    from rewards.verl_liver_reward import compute_score as active_reward
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    profile, path = _loco_reward_setup(tmp_path, monkeypatch)
+    if fault == 'cohort':
+        profile['cohort'] = 'public'
+        profile['active_classes'] = ['HCC', 'ICC', 'HA_Hemangioma']
+    elif fault == 'empty': profile['active_classes'] = []
+    elif fault == 'duplicate': profile['active_classes'].append('HCC')
+    elif fault == 'outside': profile['active_classes'].append('BCLM')
+    elif fault == 'unordered': profile['active_classes'] = {c: True for c in profile['active_classes']}
+    elif fault == 'not_mapping': profile = []
+    path.write_text(json.dumps(profile))
+    gt, raw = _loco_reward_inputs(truth='HCC')
+    with pytest.raises(RuntimeError, match='risk profile'):
+        active_reward(None, raw, gt, {'data_mode': 'private'})
+    with pytest.raises(RuntimeError, match='risk profile'):
+        reference_reward(raw, gt, config=RewardConfig(data_mode='private_5class', risk_profile=profile))
+
+
+def test_five_class_loco_profile_keeps_fnh_active(tmp_path, monkeypatch):
+    from rewards.verl_liver_reward import compute_score as active_reward, get_setting
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    profile, _ = _loco_reward_setup(tmp_path, monkeypatch, PRIVATE_CLASSES)
+    gt, raw = _loco_reward_inputs(truth='FNH', prediction='FNH')
+    assert get_setting('private') == list(PRIVATE_CLASSES)
+    assert active_reward(None, raw, gt, {'data_mode': 'private'})['cls_score'] == 1.
+    assert reference_reward(raw, gt,
+        config=RewardConfig(data_mode='private_5class', risk_profile=profile))['classification_reward'] == 1.
+
+
+def test_loco_profile_must_fit_the_selected_data_mode(tmp_path, monkeypatch):
+    from training.rars_joint_grid import candidate
+    from rewards.verl_liver_reward import compute_score as active_reward, get_setting
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    profile = candidate({'cohort': 'public', 'protocol': 'loco',
+                         'classes': ['HCC', 'ICC', 'HA_Hemangioma', 'BCLM'],
+                         'loco_pairs': [['HCC', 'ICC']], 'values': [.1]}, 0)
+    path = tmp_path / 'public_profile.json'
+    path.write_text(json.dumps(profile))
+    monkeypatch.setenv('RL_LHM_RISK_PROFILE', str(path))
+    gt, raw = _loco_reward_inputs(truth='HCC')
+    assert get_setting('5cls') == profile['active_classes']
+    with pytest.raises(RuntimeError, match='data_mode vocabulary'):
+        active_reward(None, raw, gt, {'data_mode': '3cls'})
+    with pytest.raises(RuntimeError, match='data_mode vocabulary'):
+        reference_reward(raw, gt, config=RewardConfig(data_mode='public_3class', risk_profile=profile))
+
+
+@pytest.mark.parametrize('mode,helper_mode,classes', [
+    ('private', 'private_5class', PRIVATE_CLASSES),
+    ('5cls', 'public_5class', PUBLIC_CLASSES),
+    ('3cls', 'public_3class', ('HCC', 'ICC', 'HA_Hemangioma')),
+])
+def test_no_profile_reward_vocabularies_and_penalties_unchanged(monkeypatch, mode, helper_mode, classes):
+    from rewards.verl_liver_reward import compute_score as active_reward, get_setting
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    monkeypatch.delenv('RL_LHM_RISK_PROFILE', raising=False)
+    monkeypatch.setenv('RL_LHM_REWARD_MODE', 'rars')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_MODE', 'ordinal')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_SCALE', '1.0')
+    gt, raw = _loco_reward_inputs()
+    metadata = {'data_mode': mode, 'class_counts': {c: 10 for c in classes}}
+    expected = -(len(classes) * 10 / (10 + 1e-6)) ** .35 * math.exp(.5 * 1.1)
+    assert get_setting(mode) == list(classes)
+    assert active_reward(None, raw, gt, metadata)['cls_score'] == pytest.approx(expected)
+    assert reference_reward(raw, gt, extra_info=metadata,
+        config=RewardConfig(data_mode=helper_mode))['classification_reward'] == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('cohort,mode,helper_mode,classes', [
+    ('private', 'private', 'private_5class', PRIVATE_CLASSES),
+    ('public', '5cls', 'public_5class', PUBLIC_CLASSES),
+    ('public', '3cls', 'public_3class', ('HCC', 'ICC', 'HA_Hemangioma')),
+])
+def test_main_profile_preserves_default_class_space(tmp_path, monkeypatch, cohort, mode, helper_mode, classes):
+    from training.rars_joint_grid import candidate
+    from rewards.verl_liver_reward import compute_score as active_reward, get_setting
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    profile = candidate({'cohort': cohort, 'protocol': 'main', 'values': [.1]}, 0)
+    path = tmp_path / 'main_profile.json'
+    path.write_text(json.dumps(profile))
+    monkeypatch.setenv('RL_LHM_RISK_PROFILE', str(path))
+    monkeypatch.setenv('RL_LHM_REWARD_MODE', 'rars')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_MODE', 'ordinal')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_SCALE', '1.0')
+    gt, raw = _loco_reward_inputs()
+    metadata = {'data_mode': mode, 'class_counts': {c: 10 for c in classes}}
+    expected = -(len(classes) * 10 / (10 + 1e-6)) ** .35 * math.exp(.5 * .1)
+    assert get_setting(mode) == list(classes)
+    assert active_reward(None, raw, gt, metadata)['cls_score'] == pytest.approx(expected)
+    assert reference_reward(raw, gt, extra_info=metadata,
+        config=RewardConfig(data_mode=helper_mode, risk_profile=profile))['classification_reward'] == pytest.approx(expected)

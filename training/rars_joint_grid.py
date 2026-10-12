@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +60,8 @@ def axes(config):
 
 
 def validate_profile(profile):
+    if not isinstance(profile, Mapping):
+        raise ValueError("Risk profile must be an object")
     cohort = profile.get("cohort")
     if cohort not in PAIRS or profile.get("other_weight") != 0.4:
         raise ValueError("Joint-grid profile requires known cohort and fixed other_weight=0.4")
@@ -66,7 +69,7 @@ def validate_profile(profile):
     if profile.get("protocol") == "loco":
         classes = profile.get("active_classes", [])
         pairs = profile.get("loco_pairs", [])
-        if not classes or len(classes) != len(set(classes)) or not set(classes) <= set(LABELS[cohort]) or not pairs:
+        if not isinstance(classes, list) or not classes or any(not isinstance(c, str) for c in classes) or len(classes) != len(set(classes)) or not set(classes) <= set(LABELS[cohort]) or not pairs:
             raise ValueError("LOCO profile requires its explicit active classes and search pairs")
         if any(not isinstance(pair, (list, tuple)) or len(pair) != 2 or pair[0] == pair[1] or not set(pair) <= set(classes) for pair in pairs):
             raise ValueError("LOCO search pair is outside its active classes")

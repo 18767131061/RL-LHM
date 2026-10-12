@@ -98,7 +98,10 @@ Partial searches expose only `best_among_completed_candidates` and set
 candidate and all five seeds. Exact ties select the lowest candidate index.
 `freeze` writes an audit record and `selected.profile.json`; pass the latter to
 `--risk-profile` when training with the frozen weights. Keep both records with
-the experiment, and do not use the test endpoint to revise them.
+the experiment, and do not use the test endpoint to revise them. Reward workers
+cache validated profiles by path for the process lifetime (up to four paths);
+keep each supplied profile immutable during a run. Start new workers for a
+changed profile, using a new file path.
 
 ## LOCO and synthetic tests
 
@@ -108,7 +111,14 @@ and `held_out_center`. Training rows' `extra_info.center_id` and validation
 patients' `center_id` must equal the training center; reserved-test patients'
 centers must equal the held-out center. The axes must be within the active class
 rule. Main-grid dimension counts, validation sizes and selected weights are not
-inferred for LOCO. The actual historical LOCO internal split is not bundled.
+inferred for LOCO. The reward callback uses the same explicit `active_classes`
+for completion parsing, ground-truth labels and the active-class count lower bounds.
+A class omitted from the profile is not added to `class_counts`; an explicitly
+supplied extra metadata key remains in the total under the documented count rule.
+The pure-Python `RewardConfig` helper accepts the same profile through its explicit
+`risk_profile` argument. These class rules do not constrain model token generation;
+the inference prompt and evaluation manifest define the diagnostic output interface.
+The actual historical LOCO internal split is not bundled.
 
 For tests only, `synthetic_test: true` permits a smaller subset of the same levels.
 It prohibits launching model training and a formal freeze. The integration test

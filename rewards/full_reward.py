@@ -18,6 +18,8 @@ from rewards.rars import (
     RARSParameters,
     build_rars_confusion_cost,
     default_matrix,
+    matrix_from_pair_weights,
+    profile_class_space,
 )
 
 PHASES = ("a", "p", "v")
@@ -34,6 +36,7 @@ class RewardConfig:
     clip_min: float = -6.0
     clip_max: float = 3.0
     rars_parameters: RARSParameters = RARSParameters()
+    risk_profile: Mapping[str, object] | None = None
 
 
 def class_space(data_mode: str) -> tuple[str, ...]:
@@ -44,6 +47,20 @@ def class_space(data_mode: str) -> tuple[str, ...]:
     if data_mode == "public_5class":
         return PUBLIC_CLASSES
     raise ValueError(f"Unsupported data mode: {data_mode}")
+
+
+def _profile_settings(config: RewardConfig):
+    classes = class_space(config.data_mode)
+    cohort = "private" if config.data_mode == "private_5class" else "public"
+    if config.risk_profile is None:
+        return classes, default_matrix(cohort)
+    try:
+        classes = profile_class_space(config.risk_profile, cohort, classes)
+        weights = {pair.replace("--", "->"): value
+                   for pair, value in config.risk_profile["pair_weights"].items()}
+        return classes, matrix_from_pair_weights(classes, weights, config.risk_profile["other_weight"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(f"Invalid reward risk profile: {error}") from error
 
 
 def _empty_reward(sequence_confidence: float, config: RewardConfig) -> dict[str, object]:
@@ -147,10 +164,9 @@ def classification_reward(
     class_counts: Mapping[str, int],
     config: RewardConfig,
 ) -> tuple[float, int, float]:
-    classes = class_space(config.data_mode)
+    classes, matrix = _profile_settings(config)
     normalized_counts = dict(class_counts)
     normalized_counts.update({label: max(1, int(class_counts.get(label, 1))) for label in classes})
-    matrix = default_matrix("private" if config.data_mode == "private_5class" else "public")
     reward = 0.0
     eligible = 0
     maximum_severity_factor = 1.0
@@ -227,7 +243,7 @@ def compute_score(
             raise ValueError(f"Unsupported risk matrix mode: {config.matrix_mode}")
         if not math.isfinite(config.matrix_scale) or config.matrix_scale < 0.0:
             raise ValueError("risk matrix scale must be finite and non-negative")
-        classes = class_space(config.data_mode)
+        classes, _ = _profile_settings(config)
         truth = _parse_ground_truth(ground_truth, classes)
         predicted = parse_completion(solution, classes)
         detection, phase_scores, background_correct = detection_reward(truth, predicted)

@@ -327,11 +327,16 @@ def paper_detection_reward(
 
 
 def get_setting(data_mode: str):
-    if data_mode == "private":
-        return CLASSES_PRIVATE
-    if data_mode == "3cls":
-        return CLASSES_3CLS
-    return CLASSES_5CLS
+    classes = CLASSES_PRIVATE if data_mode == "private" else CLASSES_3CLS if data_mode == "3cls" else CLASSES_5CLS
+    profile_path = os.environ.get("RL_LHM_RISK_PROFILE")
+    if profile_path:
+        from rewards.rars import profile_class_space
+        try:
+            return list(profile_class_space(_explicit_risk_profile(profile_path),
+                        "private" if data_mode == "private" else "public", classes))
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError(f"Invalid reward risk profile: {error}") from error
+    return classes
 
 
 @lru_cache(maxsize=4)
@@ -415,6 +420,8 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None, **kw
             class_counts[c] = max(1, int(class_counts.get(c, 1)))
 
         gt_dets = gt_obj.get("gt_dets", []) or []
+        if any(g.get("label") not in classes for g in gt_dets):
+            return _empty_reward(seq_confidence=seq_confidence)
         gt_background_phases = gt_obj.get("background_phases", []) or []
         parsed = parse_completion_from_text(solution_str, classes)
         if parsed is None:

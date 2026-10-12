@@ -209,6 +209,21 @@ def validate_risk_freeze(freeze: Mapping) -> None:
         raise ValueError("Freeze hash mismatch")
 
 
+def profile_class_space(profile: Mapping, cohort: str, default_classes: Sequence[str]) -> tuple[str, ...]:
+    """Resolve an explicit profile's class rule within its data-mode vocabulary."""
+    from training.rars_joint_grid import validate_profile
+
+    validate_profile(profile)
+    if profile["cohort"] != cohort:
+        raise ValueError("Risk profile cohort differs from reward data_mode")
+    if profile.get("protocol") != "loco":
+        return tuple(default_classes)
+    classes = tuple(profile["active_classes"])
+    if not set(classes) <= set(default_classes):
+        raise ValueError("LOCO active classes exceed the reward data_mode vocabulary")
+    return classes
+
+
 def default_matrix(cohort: str) -> dict[str, dict[str, float]]:
     if cohort == "private":
         return {truth: dict(row) for truth, row in RISK_SEVERITY_MATRIX_PRIVATE.items()}
