@@ -143,6 +143,8 @@ def load_config(path):
         raise ValueError("Seed-specific SFT feature caches require distinct training files")
     if config["train_file"] != config["seed_train_files"][str(SEEDS[0])]:
         raise ValueError("train_file must identify the seed-42 training cache")
+    if config.get("preparation_audit"):
+        config["preparation_audit"] = str((path.parent / config["preparation_audit"]).resolve())
     candidate(config, 0)  # validate explicit LOCO axes; never infer them from P1/U1
     return config
 
@@ -160,29 +162,11 @@ def training_row_digest(row):
     return digest(payload)
 
 
-def identities(config):
-    from evaluation.evaluate_paper_protocol import validate_manifest
-    train_patients, train_uids = set(), set()
-    train_rows = 0
-    train_payloads = {}
-    with Path(config["train_file"]).open(encoding="utf-8") as f:
-        for line in f:
-            if not line.strip():
-                continue
-            row = json.loads(line)
-            extra = row.get("extra_info", {})
-            uid, patient = extra.get("sample_uid"), extra.get("patient_id")
-            if not isinstance(uid, str) or not uid.strip() or uid in train_uids or not isinstance(patient, str) or not patient.strip():
-                raise ValueError("Training requires unique sample_uid and explicit patient_id")
-            if config["protocol"] == "loco" and extra.get("center_id") != config["training_center"]:
-                raise ValueError("LOCO training row is not from training_center")
-            train_patients.add(patient)
-            train_uids.add(uid)
-            train_payloads[uid] = training_row_digest(row)
-            train_rows += 1
+def validate_seed_caches(files, models, train_payloads, train_patients, require_contract=False):
+    train_uids = set(train_payloads)
     seed_hashes = {}
     feature_dimension = None
-    for seed, cache in config["seed_train_files"].items():
+    for seed, cache in files.items():
         ids, people, dims, feature_contracts = set(), set(), set(), set()
         with Path(cache).open(encoding="utf-8") as stream:
             for line in stream:
@@ -206,6 +190,8 @@ def identities(config):
         if feature_dimension is not None and dimension != feature_dimension:
             raise ValueError("Seed caches have different visual feature dimensions")
         feature_dimension = dimension
+        if require_contract and feature_contracts == {None}:
+            raise ValueError("Prepared formal runs require model-bound visual feature cache contracts")
         if feature_contracts != {None}:
             from scripts.extract_qwen_visual_latents import CONTRACT, extract_cache
             if feature_contracts != {CONTRACT}:
@@ -213,12 +199,82 @@ def identities(config):
             sidecar = Path(cache).with_suffix(Path(cache).suffix + ".audit.json")
             audit = json.loads(sidecar.read_text())
             identity = audit["identity"]
-            extract_cache(identity["input_path"], cache, config["seed_model_paths"][seed],
+            extract_cache(identity["input_path"], cache, models[seed],
                           identity["image_root"], identity["device"], identity["dtype"],
                           validate_only=True)
         seed_hashes[seed] = sha(cache)
+    return seed_hashes, feature_dimension
+
+
+def payloads(path):
+    result = {}
+    people = set()
+    for line in Path(path).read_text().splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        uid = row["extra_info"]["sample_uid"]
+        if uid in result:
+            raise ValueError("Duplicate prepared training UID")
+        result[uid] = training_row_digest(row)
+        people.add(row["extra_info"]["patient_id"])
+    return result, people
+
+
+def bind_preparation(config, train_payloads):
+    """Bind generated split/count outputs without asking for copied numeric dictionaries."""
+    path = config.get("preparation_audit")
+    if not path:
+        return None
+    audit = json.loads(Path(path).read_text())
+    expected_mode = "private" if config["cohort"] == "private" else "5cls"
+    if audit.get("data_mode") != expected_mode or audit.get("active_classes") != config.get("classes", LABELS[config["cohort"]]):
+        raise ValueError("Preparation cohort or active classes differ from search")
+    for output in audit["outputs"].values():
+        if sha(output["path"]) != output["sha256"]:
+            raise ValueError("Prepared data output changed")
+    training = audit["outputs"]["real961_rl_train"]
+    if payloads(training["path"])[0] != train_payloads:
+        raise ValueError("Search caches do not preserve prepared fit groups and their count metadata")
+    if config["protocol"] == "loco":
+        loco = audit.get("loco") or {}
+        checks = (loco.get("source_center") == config["training_center"],
+                  loco.get("held_out_center") == config["held_out_center"],
+                  loco.get("split_id") == config["split_id"],
+                  loco.get("validation_manifest_sha256") == sha(config["validation_manifest"]),
+                  loco.get("reserved_test_sha256") == sha(config["test_identity_manifest"]))
+        if not all(checks):
+            raise ValueError("LOCO preparation split, validation or reserved-test identity differs from search")
+    return sha(path)
+
+
+def identities(config):
+    from evaluation.evaluate_paper_protocol import validate_manifest
+    train_patients, train_uids = set(), set()
+    train_rows = 0
+    train_payloads = {}
+    with Path(config["train_file"]).open(encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            extra = row.get("extra_info", {})
+            uid, patient = extra.get("sample_uid"), extra.get("patient_id")
+            if not isinstance(uid, str) or not uid.strip() or uid in train_uids or not isinstance(patient, str) or not patient.strip():
+                raise ValueError("Training requires unique sample_uid and explicit patient_id")
+            if config["protocol"] == "loco" and extra.get("center_id") != config["training_center"]:
+                raise ValueError("LOCO training row is not from training_center")
+            train_patients.add(patient)
+            train_uids.add(uid)
+            train_payloads[uid] = training_row_digest(row)
+            train_rows += 1
+    seed_hashes, feature_dimension = validate_seed_caches(config["seed_train_files"], config["seed_model_paths"], train_payloads, train_patients,
+        require_contract=bool(config.get("preparation_audit")) and not config.get("synthetic_test", False))
     manifest = json.loads(Path(config["validation_manifest"]).read_text())
     classes, patients, groups = validate_manifest(manifest)
+    from evaluation.schema import canonical_label
+    if [canonical_label(value) for value in manifest.get("macro_classes", classes)] != classes:
+        raise ValueError("Source validation macro classes must equal its active diagnostic classes")
     if manifest.get("split") != "validation" or manifest.get("split_id") != config["split_id"]:
         raise ValueError("Validation manifest split identity does not match search")
     if set(classes) != set(LABELS[config["cohort"]]) and config["protocol"] != "loco":
@@ -240,7 +296,8 @@ def identities(config):
     validation_uids = {group["group_id"] for group in groups}
     if not train_rows or not groups or train_patients & patients.keys() or train_patients & set(test_ids) or patients.keys() & set(test_ids) or train_uids & validation_uids:
         raise ValueError("Training/validation/test identities overlap or a required split is empty")
-    return {"seed_train_sha256": seed_hashes, "training_payload_sha256": digest(train_payloads),
+    preparation_sha = bind_preparation(config, train_payloads)
+    return {"preparation_audit_sha256": preparation_sha, "seed_train_sha256": seed_hashes, "training_payload_sha256": digest(train_payloads),
             "feature_dimension": feature_dimension, "train_sha256": sha(config["train_file"]), "validation_sha256": sha(config["validation_manifest"]),
             "test_identity_sha256": sha(config["test_identity_manifest"]), "train_rows": train_rows,
             "train_patients": len(train_patients), "validation_patients": len(patients),
@@ -351,6 +408,90 @@ class Search:
             self.db.execute("INSERT INTO completed VALUES (?,?,?,?,?)", (task_id, task["candidate_index"], task["seed"], score, canonical(record)))
         return record
 
+    def finalize(self, output, refit_config=None):
+        """Expose selected models, or prepare a separately identified source-only refit."""
+        summary = self.summary()
+        best = summary["global_best_in_grid"]
+        if best is None:
+            raise ValueError("Complete every candidate and seed before final model preparation")
+        synthetic = self.config.get("synthetic_test", False)
+        result = {"search_hash": self.search_hash, "profile": best["profile"],
+                  "selected_candidate": best["candidate_index"], "synthetic_test": synthetic,
+                  "historical_results_verified": False, "models": [], "refit_tasks": []}
+        if refit_config is None:
+            for index, seed in enumerate(SEEDS):
+                task = self.task(best["candidate_index"] * len(SEEDS) + index)
+                training = Path(task["task_dir"]) / "training"
+                done = json.loads((training / "training_complete.json").read_text())
+                checkpoint = training / done["final_checkpoint"]
+                if not checkpoint.is_dir():
+                    raise ValueError("Selected checkpoint no longer exists")
+                result["models"].append({"seed": seed, "checkpoint": str(checkpoint),
+                    "train_file": task["train_file"], "train_sha256": self.identity["seed_train_sha256"][str(seed)]})
+            result.update(status="synthetic_selected_references" if synthetic else "selected_models_ready",
+                          fit_scope="selection_train_only", identity=self.identity)
+        else:
+            preparation = self.config.get("preparation_audit")
+            if not preparation or sha(preparation) != self.identity["preparation_audit_sha256"]:
+                raise ValueError("Refit requires the unchanged source preparation audit bound to selection")
+            audit = json.loads(Path(preparation).read_text())
+            loco = audit.get("loco") or {}
+            if self.config["protocol"] != "loco" or loco.get("final_fit_scope") != "train_plus_validation":
+                raise ValueError("Refit must be explicitly prepared from source train plus validation")
+            combined = audit["outputs"]["real961_rl_refit_train_validation"]
+            if sha(combined["path"]) != combined["sha256"]:
+                raise ValueError("Prepared combined refit data changed")
+            expected_payloads, expected_people = payloads(combined["path"])
+            fit_payloads, fit_people = payloads(self.config["train_file"])
+            validation = json.loads(Path(self.config["validation_manifest"]).read_text())
+            expected_uids = set(fit_payloads) | {row["group_id"] for row in validation["input_groups"]}
+            if set(expected_payloads) != expected_uids or expected_people != fit_people | {row["patient_id"] for row in validation["patients"]}:
+                raise ValueError("Refit must contain exactly the source fit/validation union")
+            for line in Path(combined["path"]).read_text().splitlines():
+                if line.strip() and json.loads(line)["extra_info"].get("center_id") != self.config["training_center"]:
+                    raise ValueError("Refit contains a non-source center")
+            refit_path = Path(refit_config).resolve()
+            refit = json.loads(refit_path.read_text())
+            if refit.get("fit_scope") != "train_plus_validation":
+                raise ValueError("Refit config must explicitly declare train_plus_validation")
+            mappings = {}
+            for key in ("seed_train_files", "seed_model_paths"):
+                values = refit.get(key, {})
+                if set(values) != {str(seed) for seed in SEEDS}:
+                    raise ValueError("Refit requires a cache and explicitly selected SFT model for every seed")
+                mappings[key] = {seed: str((refit_path.parent / path).resolve()) for seed, path in values.items()}
+                if len(set(mappings[key].values())) != len(SEEDS):
+                    raise ValueError("Refit seed paths must be distinct")
+            if any(not Path(path).is_dir() for path in mappings["seed_model_paths"].values()):
+                raise ValueError("Refit SFT model paths must exist")
+            hashes, dimension = validate_seed_caches(mappings["seed_train_files"], mappings["seed_model_paths"], expected_payloads, expected_people,
+                                                      require_contract=not synthetic)
+            root = Path(self.config["output_root"]) / self.search_hash[:16] / "final_refit"
+            for seed in SEEDS:
+                folder = root / f"seed_{seed}"
+                profile_path = folder / "risk_profile.json"
+                command = [sys.executable, str(ROOT / "training/run_verl_lhm_variant.py"),
+                    "--train-file", mappings["seed_train_files"][str(seed)],
+                    "--model-path", mappings["seed_model_paths"][str(seed)],
+                    "--output-dir", str(folder / "training"), "--variant", "full_rl_lhm",
+                    "--seed", str(seed), "--scripts-dir", str(ROOT),
+                    "--risk-profile", str(profile_path), "--n-gpus", str(self.config.get("n_gpus", 4))]
+                task = {"seed": seed, "fit_scope": "train_plus_validation", "command": command,
+                        "train_sha256": hashes[str(seed)], "preparation_sha256": sha(preparation),
+                        "synthetic_test": synthetic, "training_executed": False}
+                task_path = folder / "task.json"
+                if task_path.exists() and json.loads(task_path.read_text()) != task:
+                    raise ValueError("Refit output directory belongs to a different model/cache identity")
+                write_json(profile_path, best["profile"])
+                write_json(task_path, task)
+                write_json(folder / "train_command.json", command)
+                result["refit_tasks"].append(task)
+            result.update(status="synthetic_refit_commands_only" if synthetic else "refit_commands_prepared_not_trained",
+                          fit_scope="train_plus_validation", feature_dimension=dimension,
+                          class_counts=combined["class_counts"], preparation_sha256=sha(preparation))
+        write_json(output, result)
+        return result
+
     def summary(self):
         count, candidates_complete = 0, 0
         current, entries = None, []
@@ -410,6 +551,9 @@ def main():
     score.add_argument("--predictions", type=Path, required=True)
     score.add_argument("--receipt", type=Path, required=True)
     commands.add_parser("summary")
+    final = commands.add_parser("finalize")
+    final.add_argument("--output", type=Path, required=True)
+    final.add_argument("--refit-config", type=Path)
     freeze = commands.add_parser("freeze")
     freeze.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -431,6 +575,8 @@ def main():
         print(canonical({"task": task, "command": command}))
     elif args.command == "score":
         print(canonical(search.score(args.task, args.predictions, args.receipt)))
+    elif args.command == "finalize":
+        print(canonical(search.finalize(args.output, args.refit_config)))
     else:
         summary = search.summary()
         if args.command == "freeze":

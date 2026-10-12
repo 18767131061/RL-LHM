@@ -188,3 +188,147 @@ def test_seed_features_may_change_without_changing_training_payload(tmp_path):
     search = Search(cfg, tmp_path / "search.db")
     assert search.identity["feature_dimension"] == 2
     assert len(search.identity["training_payload_sha256"]) == 64
+
+
+def test_source_validation_cannot_copy_target_macro_subset(tmp_path):
+    cfg = configuration(tmp_path)
+    manifest = json.loads(Path(cfg['validation_manifest']).read_text())
+    manifest['macro_classes'] = ['HCC', 'ICC']
+    write_json(cfg['validation_manifest'], manifest)
+    with pytest.raises(ValueError, match='Source validation macro'):
+        Search(cfg, tmp_path / 's.db')
+
+
+def prepared_loco_configuration(tmp_path):
+    import subprocess, sys
+    from test_training_data_cli import TrainingDataCliTests
+    source = tmp_path / 'source.jsonl'
+    for phase in ('a', 'p', 'v'):
+        (tmp_path / f'{phase}.png').write_bytes(b'synthetic-image-not-loaded')
+    rows = []
+    for label in ('HCC', 'ICC'):
+        for i in range(4):
+            row = TrainingDataCliTests.source_row(f'{label}{i}', 'HCC')
+            row['metadata'].update(analysis_center='A', **{'class': label})
+            rows.append(row)
+    source.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    write_json(tmp_path / 'test.json', {'split': 'test', 'patients': [{'patient_id': 'test-p', 'center_id': 'B'}]})
+    prepared = tmp_path / 'prepared'
+    process = subprocess.run([sys.executable, '-S', str(Path(__file__).resolve().parents[1] / 'preprocess/build_verl_real961_dataset.py'),
+        '--loco-source-jsonl', str(source), '--data-root', str(tmp_path), '--output-dir', str(prepared),
+        '--source-center', 'A', '--held-out-center', 'B', '--tuning-fraction', '.25', '--split-seed', '97',
+        '--active-classes', 'HCC', 'ICC', '--split-id', 'A_to_B', '--test-identity-manifest', str(tmp_path / 'test.json'),
+        '--refit-train-validation'], capture_output=True, text=True)
+    assert process.returncode == 0, process.stderr
+    files, models = {}, {}
+    for seed in SEEDS:
+        path = tmp_path / f'train-{seed}.jsonl'
+        cached = [json.loads(line) for line in (prepared / 'real961_rl_train.jsonl').read_text().splitlines()]
+        for row in cached:
+            row['extra_info']['visual_z'] = row['reward_model']['extra_info']['visual_z'] = [1., 0.]
+        path.write_text(''.join(json.dumps(row) + '\n' for row in cached))
+        files[str(seed)] = str(path)
+        models[str(seed)] = str(tmp_path / f'sft-{seed}')
+        Path(models[str(seed)]).mkdir()
+    cfg = {'cohort': 'private', 'protocol': 'loco', 'split_id': 'A_to_B', 'selection_split': 'validation',
+        'formal_test_used_for_selection': False, 'training_center': 'A', 'held_out_center': 'B',
+        'classes': ['HCC', 'ICC'], 'loco_pairs': [['HCC', 'ICC']], 'values': [.1, .2], 'seeds': SEEDS,
+        'synthetic_test': True, 'train_file': files['42'], 'seed_train_files': files, 'seed_model_paths': models,
+        'validation_manifest': str(prepared / 'validation_manifest.json'), 'test_identity_manifest': str(tmp_path / 'test.json'),
+        'preparation_audit': str(prepared / 'audit.json'), 'output_root': str(tmp_path / 'runs')}
+    write_json(tmp_path / 'config.json', cfg)
+    return load_config(tmp_path / 'config.json'), prepared
+
+
+def complete_prepared_loco(search):
+    manifest = json.loads(Path(search.config['validation_manifest']).read_text())
+    truths = {row['patient_id']: row['truth'] for row in manifest['patients']}
+    for task_id in range(search.n_tasks):
+        pred, receipt, _ = simulated_training_and_prediction(search, task_id)
+        rows = [{'group_id': group['group_id'], 'raw': json.dumps({'detections': [
+            {'phase': phase, 'label': truths[group['patient_id']], 'bbox_2d': [0, 0, 1, 1]} for phase in ('a', 'p', 'v')]}),
+            'completion_nll': .2} for group in manifest['input_groups']]
+        pred.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        data = json.loads(receipt.read_text());data['predictions_sha256'] = sha(pred);write_json(receipt, data)
+        search.score(task_id, pred, receipt)
+
+
+def refit_inputs(tmp_path, prepared):
+    refit = {'fit_scope': 'train_plus_validation', 'seed_train_files': {}, 'seed_model_paths': {}}
+    for seed in SEEDS:
+        rows = [json.loads(line) for line in (prepared / 'real961_rl_refit_train_validation.jsonl').read_text().splitlines()]
+        for row in rows:
+            row['extra_info']['visual_z'] = row['reward_model']['extra_info']['visual_z'] = [0., 1.]
+        path = tmp_path / f'refit-{seed}.jsonl';path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+        model = tmp_path / f'refit-sft-{seed}';model.mkdir()
+        refit['seed_train_files'][str(seed)] = str(path)
+        refit['seed_model_paths'][str(seed)] = str(model)
+    path = tmp_path / 'refit.json';write_json(path, refit)
+    return path, refit
+
+
+def test_prepared_loco_split_counts_search_and_final_scope(tmp_path):
+    cfg, prepared = prepared_loco_configuration(tmp_path)
+    search = Search(cfg, tmp_path / 's.db')
+    assert search.identity['train_patients'] == 6 and search.identity['validation_patients'] == 2
+    assert search.identity['preparation_audit_sha256'] == sha(prepared / 'audit.json')
+    with pytest.raises(ValueError, match='Complete every'):
+        search.finalize(tmp_path / 'early.json')
+    complete_prepared_loco(search)
+    selected = search.finalize(tmp_path / 'selected_models.json')
+    assert selected['status'] == 'synthetic_selected_references'
+    assert selected['fit_scope'] == 'selection_train_only' and len(selected['models']) == 5
+    assert all(Path(row['checkpoint']).is_dir() for row in selected['models'])
+    refit_path, _ = refit_inputs(tmp_path, prepared)
+    result = search.finalize(tmp_path / 'final_refit.json', refit_path)
+    assert result['status'] == 'synthetic_refit_commands_only' and result['models'] == []
+    assert result['class_counts'] == {'HCC': 8} and len(result['refit_tasks']) == 5
+    for task in result['refit_tasks']:
+        assert task['training_executed'] is False
+        command = task['command']
+        assert Path(command[command.index('--train-file') + 1]).name == f"refit-{task['seed']}.jsonl"
+        assert Path(command[command.index('--model-path') + 1]).name == f"refit-sft-{task['seed']}"
+        assert not Path(command[command.index('--output-dir') + 1]).exists()
+
+
+@pytest.mark.parametrize('fault', ['counts', 'audit', 'validation'])
+def test_preparation_binding_rejects_changes(tmp_path, fault):
+    cfg, prepared = prepared_loco_configuration(tmp_path)
+    if fault == 'counts':
+        for path in cfg['seed_train_files'].values():
+            rows = [json.loads(line) for line in Path(path).read_text().splitlines()]
+            for row in rows:
+                row['extra_info']['class_counts'] = row['reward_model']['extra_info']['class_counts'] = {'HCC': 999}
+            Path(path).write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    elif fault == 'audit':
+        audit = json.loads((prepared / 'audit.json').read_text());audit['loco']['source_center'] = 'B';write_json(prepared / 'audit.json', audit)
+    else:
+        manifest = json.loads(Path(cfg['validation_manifest']).read_text());manifest['patients'][0]['patient_id'] = 'changed'
+        for group in manifest['input_groups']:
+            if group['patient_id'] != manifest['patients'][1]['patient_id']:group['patient_id'] = 'changed'
+        write_json(cfg['validation_manifest'], manifest)
+    with pytest.raises(ValueError): Search(cfg, tmp_path / 's.db')
+
+
+def test_refit_cache_cannot_add_test_patient_or_change_model_identity(tmp_path):
+    cfg, prepared = prepared_loco_configuration(tmp_path)
+    search = Search(cfg, tmp_path / 's.db');complete_prepared_loco(search)
+    refit_path, refit = refit_inputs(tmp_path, prepared)
+    path = Path(refit['seed_train_files']['42'])
+    original = path.read_text();rows = [json.loads(line) for line in original.splitlines()]
+    rows[0]['extra_info']['patient_id'] = 'test-p'
+    path.write_text(''.join(json.dumps(row) + '\n' for row in rows))
+    with pytest.raises(ValueError):search.finalize(tmp_path / 'bad.json', refit_path)
+    path.write_text(original)
+    search.finalize(tmp_path / 'good.json', refit_path)
+    changed = tmp_path / 'another_sft';changed.mkdir();refit['seed_model_paths']['42'] = str(changed);write_json(refit_path, refit)
+    with pytest.raises(ValueError, match='different model/cache identity'):
+        search.finalize(tmp_path / 'changed.json', refit_path)
+
+
+def test_formal_prepared_cache_requires_model_binding(tmp_path):
+    from training.rars_joint_grid import validate_seed_caches, payloads
+    cfg, _ = prepared_loco_configuration(tmp_path)
+    base, people = payloads(cfg['train_file'])
+    with pytest.raises(ValueError, match='model-bound'):
+        validate_seed_caches(cfg['seed_train_files'], cfg['seed_model_paths'], base, people, require_contract=True)

@@ -8,7 +8,7 @@ The reward path is `rewards/verl_liver_reward.py`; SHAE and DA-CVQ/VGS state are
 
 For the reported primary private-cohort experiments, model training used the 654 training patients. The 117 validation patients were used for parameter selection and were not added to the final model's training set. To preserve this protocol, use the train-only output below; the optional combined-refit output describes a different data-use policy.
 
-The converter accepts already prepared three-image groups and structured targets. It checks that the three referenced image files exist; it does not select CT slices, register phases, or extract visual embeddings.
+The converter accepts already prepared three-image groups and structured targets. It checks that the three referenced image files exist; it does not select CT slices, register phases, or extract visual embeddings. `--data-mode private` (default), `5cls`, or `3cls` selects the private five-class, public five-class, or public three-class schema. All three modes use the same count construction. Present `metadata.center_id` or `metadata.analysis_center` fields are preserved as `extra_info.center_id`; conflicting values fail. A supplied patient reference `metadata.class` is preserved separately as `patient_class`, never replaced by the lesion-record majority label.
 
 ```bash
 python preprocess/build_verl_real961_dataset.py \
@@ -43,6 +43,29 @@ python preprocess/build_verl_real961_dataset.py \
 ```
 
 This adds `real961_rl_refit_train_validation.jsonl`; it never substitutes combined data into `real961_rl_train.jsonl`. The additional file carries class counts computed from both supplied sources. `audit.json` marks the explicit refit role and that the validation source is no longer held out from this combined file. Starting a refit requires passing that exact additional filename as `--train-file`. The flag requires a nonempty validation source and does not decide whether a refit is appropriate for an experiment.
+
+## Prepare a source-center LOCO split
+
+The alternative `--loco-source-jsonl` input contains prepared groups from one source center. Every group must have consistent center metadata, `patient_id`, `statistical_patient_id`, and an explicit patient reference diagnosis in `metadata.class`. The reference diagnosis stratifies patients; the group majority still determines scarcity counts. All groups from a patient stay together. Within each reference class, patients are ordered by SHA256 of `seed:patient_id`. The validation count is `min(n-1, max(1, round(n*fraction)))` using Python rounding, with an explicit fraction strictly between 0 and 0.5. Singleton strata fail because both fitting and validation need a member; realized per-class allocations are written to `audit.json`.
+
+Supply the validation fraction and split seed for the intended run; this interface provides no historical LOCO defaults. The shell variables below are required inputs, not recovered experimental values:
+
+```bash
+python preprocess/build_verl_real961_dataset.py \
+  --data-root /path/to/images \
+  --loco-source-jsonl /path/to/wmu_source.jsonl \
+  --data-mode private --source-center WMU --held-out-center ZJU \
+  --tuning-fraction "$VALIDATION_FRACTION" --split-seed "$SPLIT_SEED" \
+  --active-classes HCC ICC FNH HA_Hemangioma nodule_CYST \
+  --split-id WMU_to_ZJU --test-identity-manifest /path/to/zju_test_ids.json \
+  --output-dir ./outputs/wmu_source
+```
+
+The reserved-test file contains `split: "test"` and unique `patients` entries with `patient_id` and `center_id`. Its identities must belong to the held-out center and must not overlap either source patient identifier. No test labels or images are needed. For the reverse direction, use ZJU as source, WMU as held out, and the four shared active classes without FNH.
+
+Alongside the training, validation, monitor and audit files above, this mode writes `validation_manifest.json` for canonical patient evaluation and `validation_source.jsonl` for the prepared-group inference interface. The manifest keeps the patient reference diagnosis separate from phase-level ground truth. Training and validation records share counts computed only from the source fitting groups. Add `--refit-train-validation` only when explicitly preparing the separate source union: its counts are recomputed, and its file does not replace the fitting file. Source patient allocation, active classes, final fitting scope and artifact hashes are recorded in `audit.json`.
+
+Use that audit as `preparation_audit` in the [joint search](rars_joint_search.md). Extract one cache per seed from the fitting file and its matching SFT checkpoint; the runner binds every non-feature payload field, including counts, across seeds and to the prepared file. This gives an executable current protocol once the caller supplies source groups and explicit configuration; it does not establish the historical LOCO fraction, seed or refit choice.
 
 ## Eight component combinations
 

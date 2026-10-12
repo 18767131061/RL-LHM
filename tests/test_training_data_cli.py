@@ -176,6 +176,90 @@ class TrainingDataCliTests(unittest.TestCase):
         self.assertFalse(audit["validation_held_out_from_refit"])
         self.assertEqual(audit["outputs"]["real961_rl_refit_train_validation"]["class_counts_population"], "supplied_train_and_validation_sources")
 
+    def test_center_metadata_is_preserved_and_conflicts_rejected(self):
+        for row in self.train_rows + self.validation_rows:
+            row['metadata']['analysis_center'] = 'source'
+        write_jsonl(self.train_path, self.train_rows)
+        write_jsonl(self.validation_path, self.validation_rows)
+        output, _ = self.convert()
+        for row in read_jsonl(output / 'real961_rl_train.jsonl'):
+            self.assertEqual(row['extra_info']['center_id'], 'source')
+            self.assertEqual(row['reward_model']['extra_info']['center_id'], 'source')
+        self.train_rows[0]['metadata']['center_id'] = 'different'
+        write_jsonl(self.train_path, self.train_rows)
+        _, result = self.convert('bad_center', succeeds=False)
+        self.assertIn('consistent nonempty', result.stderr)
+
+    def test_public_counts_use_same_positive_group_rule(self):
+        self.train_rows = [self.source_row('b1', 'BCLM'), self.source_row('c1', 'CRLM'),
+                           self.source_row('b2', 'BCLM'), self.source_row('bg', None)]
+        write_jsonl(self.train_path, self.train_rows)
+        output, result = self.convert(extra=('--data-mode', '5cls'), with_validation=False)
+        for row in read_jsonl(output / 'real961_rl_train.jsonl'):
+            self.assertEqual(row['extra_info']['class_counts'], {'BCLM': 2, 'CRLM': 1})
+            self.assertEqual(row['extra_info']['data_mode'], '5cls')
+        self.assertEqual(json.loads(result.stdout)['active_classes'], ['HCC', 'ICC', 'HA_Hemangioma', 'BCLM', 'CRLM'])
+        _, result = self.convert('public3_bad', extra=('--data-mode', '3cls'), with_validation=False, succeeds=False)
+        self.assertIn('out of contract', result.stderr)
+
+    def loco_source(self):
+        rows = []
+        # Reference patient diagnosis differs from lesion/group majority on purpose.
+        for label in ('HCC', 'ICC'):
+            for index in range(4):
+                row = self.source_row(f'{label}{index}', 'HCC')
+                row['metadata'].update(analysis_center='source', **{'class': label})
+                rows.append(row)
+        write_jsonl(self.train_path, rows)
+        test = self.work / 'reserved_test.json'
+        test.write_text(json.dumps({'split': 'test', 'patients': [{'patient_id': 'heldout', 'center_id': 'target'}]}))
+        return rows, test
+
+    def convert_loco(self, name='loco', extra=(), succeeds=True):
+        output = self.work / name
+        return output, self.run_cli('preprocess/build_verl_real961_dataset.py', [
+            '--data-root', self.work, '--loco-source-jsonl', self.train_path,
+            '--output-dir', output, '--source-center', 'source', '--held-out-center', 'target',
+            '--tuning-fraction', '.25', '--split-seed', '97', '--active-classes', 'HCC', 'ICC',
+            '--split-id', 'source_to_target', '--test-identity-manifest', self.work / 'reserved_test.json',
+            *extra], succeeds=succeeds)
+
+    def test_loco_partition_uses_patient_truth_and_counts_fit_groups(self):
+        self.loco_source()
+        output, result = self.convert_loco(extra=('--refit-train-validation',))
+        again, _ = self.convert_loco('again', extra=('--refit-train-validation',))
+        train = read_jsonl(output / 'real961_rl_train.jsonl')
+        val = read_jsonl(output / 'real961_rl_validation.jsonl')
+        audit = json.loads(result.stdout)
+        self.assertEqual(audit['loco']['train_patients_by_class'], {'HCC': 3, 'ICC': 3})
+        self.assertEqual(audit['loco']['validation_patients_by_class'], {'HCC': 1, 'ICC': 1})
+        self.assertEqual(len(train), 6)
+        self.assertEqual(len(val), 2)
+        self.assertFalse({r['extra_info']['patient_id'] for r in train} & {r['extra_info']['patient_id'] for r in val})
+        self.assertTrue(all(r['extra_info']['class_counts'] == {'HCC': 6} for r in train + val))
+        refit = read_jsonl(output / 'real961_rl_refit_train_validation.jsonl')
+        self.assertTrue(all(r['extra_info']['class_counts'] == {'HCC': 8} for r in refit))
+        self.assertEqual((output / 'real961_rl_train.jsonl').read_bytes(), (again / 'real961_rl_train.jsonl').read_bytes())
+        manifest = json.loads((output / 'validation_manifest.json').read_text())
+        self.assertEqual({p['truth'] for p in manifest['patients']}, {'HCC', 'ICC'})
+        self.assertEqual({g['group_id'] for g in manifest['input_groups']}, {r['uid'] for r in val})
+        self.assertEqual(len(read_jsonl(output / 'validation_source.jsonl')), 2)
+        self.assertEqual(audit['loco']['final_fit_scope'], 'train_plus_validation')
+        self.assertEqual(audit['sources']['train']['input_groups'], 8)
+
+    def test_loco_rejects_missing_reference_center_and_test_leakage(self):
+        for fault in ('missing_truth', 'target_row', 'test_overlap', 'patient_conflict'):
+            with self.subTest(fault=fault):
+                rows, test = self.loco_source()
+                if fault == 'missing_truth': rows[0]['metadata'].pop('class')
+                elif fault == 'target_row': rows[0]['metadata']['analysis_center'] = 'target'
+                elif fault == 'test_overlap':
+                    test.write_text(json.dumps({'split':'test','patients':[{'patient_id':rows[0]['metadata']['statistical_patient_id'],'center_id':'target'}]}))
+                elif fault == 'patient_conflict': rows[1]['metadata']['statistical_patient_id'] = rows[0]['metadata']['statistical_patient_id']; rows[1]['metadata']['class'] = 'ICC'
+                write_jsonl(self.train_path, rows)
+                output, _ = self.convert_loco(fault, succeeds=False)
+                self.assertFalse(output.exists())
+
     def test_monitor_without_validation_is_explicit_training_diagnostic(self):
         output, result = self.convert(with_validation=False)
         self.assertFalse((output / "real961_rl_validation.jsonl").exists())

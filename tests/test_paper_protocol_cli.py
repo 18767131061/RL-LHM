@@ -39,9 +39,10 @@ def prediction(group_id, detections, nll=None):
     return {"group_id": group_id, "raw": completion(detections), "completion_nll": nll}
 
 
-def run_cli(tmp_path, patients, groups, predictions, thresholds=(0.5,)):
+def run_cli(tmp_path, patients, groups, predictions, thresholds=(0.5,), *, manifest_fields=None):
     tmp_path.mkdir(parents=True, exist_ok=True)
     manifest = {"schema_version": 1, "classes": CLASSES, "patients": patients, "input_groups": groups}
+    manifest.update(manifest_fields or {})
     (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (tmp_path / "predictions.jsonl").write_text("".join(json.dumps(row) + "\n" for row in predictions), encoding="utf-8")
     output = tmp_path / "results"
@@ -202,3 +203,79 @@ def test_existing_evaluation_outputs_are_not_overwritten(tmp_path):
     assert second.returncode != 0
     assert "Output files already exist" in second.stderr
     assert (output / "metrics.json").read_bytes() == original
+
+
+def test_five_output_classes_with_four_macro_classes_retains_fnh_votes(tmp_path):
+    classes = ["HCC", "ICC", "FNH", "HH", "NC"]
+    macro_classes = ["HCC", "ICC", "HH", "NC"]
+    patients = [{"patient_id": label, "truth": label} for label in macro_classes]
+    groups = [group(label, label, {"a": [lesion(label)]}) for label in macro_classes]
+    groups.append(group("ICC-fnh", "ICC", {"a": [lesion("ICC")]}))
+    predictions = [prediction(label, [("a", lesion(label))], 0.9) for label in macro_classes]
+    predictions.append(prediction("ICC-fnh", [("a", lesion("FNH"))], 0.1))
+    definitions = {
+        "five_default": {"classes": classes},
+        "five_explicit": {"classes": classes, "macro_classes": classes},
+        "four_macro": {"classes": classes, "macro_classes": macro_classes},
+        "four_output": {"classes": macro_classes},
+    }
+    results = {}
+    for name, fields in definitions.items():
+        process, result, _ = run_cli(tmp_path / name, patients, groups, predictions, manifest_fields=fields)
+        assert process.returncode == 0, process.stderr
+        results[name] = result
+    baseline, selected = results["five_default"], results["four_macro"]
+    # The new field only changes the classification averaging space. In
+    # particular, FNH retains its vote and its geometry/class-aware detections.
+    assert selected["patients"] == baseline["patients"]
+    assert selected["input_groups"] == baseline["input_groups"]
+    assert selected["coverage"] == baseline["coverage"]
+    assert selected["detection"] == baseline["detection"]
+    assert baseline["classification"] == results["five_explicit"]["classification"]
+    assert baseline["classification"]["macro_f1"] == pytest.approx(0.6)
+    for metric in ["accuracy", "macro_precision", "macro_recall", "macro_f1"]:
+        assert selected["classification"][metric] == pytest.approx(0.75)
+    assert selected["classification"]["n"] == 4
+    assert selected["classification"]["per_class"]["ICC"]["fn"] == 1
+    assert selected["macro_classes"] == ["HCC", "ICC", "HA_Hemangioma", "nodule_CYST"]
+    assert "FNH" in selected["classes"] and "FNH" not in selected["classification"]["per_class"]
+    icc = next(row for row in selected["patients"] if row["patient_id"] == "ICC")
+    assert (icc["prediction"], icc["valid_votes"], icc["abstained"]) == ("FNH", 2, False)
+    # Shrinking the output vocabulary is not an equivalent workaround: it
+    # rejects the FNH completion and changes this patient's winning diagnosis.
+    assert results["four_output"]["classification"]["accuracy"] == 1
+    assert results["four_output"]["coverage"]["schema_valid_groups"] == 4
+
+
+@pytest.mark.parametrize("macro_classes, expected", [
+    ([], "non-empty ordered list"),
+    (None, "non-empty ordered list"),
+    ("HCC", "non-empty ordered list"),
+    (["HCC", "HCC"], "unique after alias normalization"),
+    (["HCC", "HH", "HA_Hemangioma"], "unique after alias normalization"),
+    (["HCC", "BCLM"], "subset of classes"),
+    (["HCC", "unknown"], "Unknown label"),
+    (["ICC"], "contain every patient truth"),
+])
+def test_invalid_macro_space_fails_without_excluding_patients(tmp_path, macro_classes, expected):
+    process, result, output = run_cli(
+        tmp_path, [{"patient_id": "p1", "truth": "HCC"}], [], [],
+        manifest_fields={"classes": ["HCC", "ICC", "FNH", "HH", "NC"], "macro_classes": macro_classes},
+    )
+    assert process.returncode != 0
+    assert expected in process.stderr
+    assert result is None and not output.exists()
+
+
+def test_explicit_macro_space_preserves_no_vote_denominator_and_zero_support_classes(tmp_path):
+    process, result, _ = run_cli(
+        tmp_path, [{"patient_id": "p1", "truth": "HCC"}], [], [],
+        manifest_fields={"macro_classes": ["ICC", "HCC"]},
+    )
+    assert process.returncode == 0, process.stderr
+    assert result["classification"]["n"] == 1
+    assert result["classification"]["accuracy"] == result["classification"]["macro_f1"] == 0
+    assert list(result["classification"]["per_class"]) == ["ICC", "HCC"]
+    assert result["classification"]["per_class"]["ICC"]["support"] == 0
+    assert result["classification"]["per_class"]["HCC"]["fn"] == 1
+    assert result["coverage"]["patients_without_valid_vote"] == 1

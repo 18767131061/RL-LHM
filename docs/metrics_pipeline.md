@@ -61,9 +61,15 @@ records and does not fill or copy phase images or annotations.
 }
 ```
 
-- `classes` is the frozen active class order used for macro metrics and fixed
-  tie-breaking. Exact aliases accepted by `evaluation/schema.py`, such as `HH`
+- `classes` is the frozen output/lesion class order used for schema validation,
+  group voting and fixed patient tie-breaking. Exact aliases accepted by `evaluation/schema.py`, such as `HH`
   and `NC`, are normalized; aliases cannot create duplicate active classes.
+- Optional `macro_classes` specifies the fixed class space for classification
+  macro averages and per-class summaries. It defaults to `classes`, preserving
+  the existing metrics. It must be a non-empty ordered subset of `classes`,
+  unique after alias normalization, and must include every patient truth label.
+  Explicit zero-support classes remain in the average; the evaluator never
+  infers this space from the labels observed in a particular sample.
 - `patients` must list each patient exactly once, with the patient-level reference
   diagnosis in `truth`. This label is used only to score the patient endpoint.
 - `group_id` is unique across the evaluation. `patient_id` must occur in `patients`.
@@ -77,6 +83,23 @@ records and does not fill or copy phase images or annotations.
   unknown or missing annotation. No GT background sentinel is used. Missing
   annotations are errors; patient diagnosis and another phase's boxes are never
   substituted for them.
+
+For WMU-to-ZJU evaluation, use five output classes and the four supported macro
+classes:
+
+```json
+"classes": ["HCC", "ICC", "FNH", "HA_Hemangioma", "nodule_CYST"],
+"macro_classes": ["HCC", "ICC", "HA_Hemangioma", "nodule_CYST"]
+```
+
+An FNH completion remains schema-valid and retains its diagnostic vote. An FNH
+patient prediction counts as an incorrect diagnosis and a false negative for the
+patient's true class; it is not discarded or re-voted. This field does not filter
+patients, alter voting, or change detection matching. For ZJU-to-WMU, supply the
+four shared output classes and the already defined 316-patient evaluation cohort;
+`macro_classes` can be omitted because it then matches `classes`. Internal
+source-center validation is a separate population and must use its own fixed
+source class space rather than copying the target-center macro subset.
 
 ## Prediction records
 
@@ -126,7 +149,8 @@ is different from a missing inference record.
 
 - `metrics.json`: fixed-label patient metrics, all three detection protocols at
   each threshold, GT-denominator Mean IoU, input/patient coverage, excluded-phase
-  counts, per-group/per-patient details, and SHA-256 hashes of the two input files.
+  counts, normalized `classes` and `macro_classes`, per-group/per-patient details,
+  and SHA-256 hashes of the two input files.
 - `patient_predictions.csv`: every manifest patient, including undefined
   predictions, with input-group and eligible-vote counts.
 - `input_group_audit.csv`: every manifest group, schema validity, diagnostic

@@ -52,6 +52,18 @@ def _read_json(text: str) -> Any:
         raise SchemaError(f"Invalid JSON: {error.msg}") from error
 
 
+def _macro_classes(payload: dict, classes: Sequence[str]) -> list[str]:
+    raw = payload.get("macro_classes", list(classes))
+    if not isinstance(raw, list) or not raw:
+        raise SchemaError("Manifest macro_classes must be a non-empty ordered list")
+    labels = [canonical_label(label) for label in raw]
+    if len(labels) != len(set(labels)):
+        raise SchemaError("Manifest macro_classes must remain unique after alias normalization")
+    if not set(labels).issubset(classes):
+        raise SchemaError("Manifest macro_classes must be a subset of classes")
+    return labels
+
+
 def validate_manifest(payload: Any) -> tuple[list[str], dict[str, str], list[dict]]:
     if not isinstance(payload, dict) or type(payload.get("schema_version")) is not int or payload["schema_version"] != 1:
         raise SchemaError("Manifest must be an object with schema_version=1")
@@ -61,6 +73,7 @@ def validate_manifest(payload: Any) -> tuple[list[str], dict[str, str], list[dic
     classes = [canonical_label(label) for label in raw_classes]
     if len(classes) != len(set(classes)):
         raise SchemaError("Manifest classes must remain unique after alias normalization")
+    macro_classes = _macro_classes(payload, classes)
 
     rows = payload.get("patients")
     if not isinstance(rows, list) or not rows:
@@ -73,6 +86,8 @@ def validate_manifest(payload: Any) -> tuple[list[str], dict[str, str], list[dic
         truth = canonical_label(row.get("truth"))
         if patient_id in patients or truth not in classes:
             raise SchemaError(f"Duplicate patient or out-of-vocabulary patient truth: {patient_id}")
+        if truth not in macro_classes:
+            raise SchemaError(f"Manifest macro_classes must contain every patient truth: {patient_id}")
         patients[patient_id] = truth
 
     groups = payload.get("input_groups")
@@ -155,6 +170,7 @@ def read_predictions(path: Path, expected_group_ids: set[str]) -> dict[str, dict
 
 def evaluate(manifest: Any, prediction_path: Path, thresholds: Sequence[float]) -> dict:
     classes, patients, groups = validate_manifest(manifest)
+    macro_classes = _macro_classes(manifest, classes)
     thresholds = list(thresholds)
     if not thresholds or len(thresholds) != len(set(thresholds)) or any(not math.isfinite(t) or not 0 <= t <= 1 for t in thresholds):
         raise SchemaError("IoU thresholds must be unique finite values in [0,1]")
@@ -218,7 +234,7 @@ def evaluate(manifest: Any, prediction_path: Path, thresholds: Sequence[float]) 
             "tied": result.tied, "abstained": result.abstained,
         })
     metrics = classification_metrics(
-        [row["truth"] for row in patient_details], [row["prediction"] for row in patient_details], classes,
+        [row["truth"] for row in patient_details], [row["prediction"] for row in patient_details], macro_classes,
     )
     detection = {protocol: [] for protocol in PROTOCOLS}
     for (protocol, threshold), counts in totals.items():
@@ -232,6 +248,7 @@ def evaluate(manifest: Any, prediction_path: Path, thresholds: Sequence[float]) 
     return {
         "protocol_version": PROTOCOL_VERSION,
         "classes": classes,
+        "macro_classes": macro_classes,
         "classification": metrics,
         "coverage": {
             "patients": len(patients), "manifest_groups": len(groups), "prediction_records": len(predictions),
