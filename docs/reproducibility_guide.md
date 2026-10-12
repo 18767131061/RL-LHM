@@ -6,7 +6,7 @@ For a reproducible training and evaluation run, specify the following without di
 
 - **Training objective:** the actual policy-loss implementation, token- or completion-level probability ratio, clipping, masking and aggregation. The launcher fixes the current token-level configuration and checks pinned loss functions plus the required global-token-mean actor patch. This current contract does not establish the historical runtime.
 - **Runtime:** the exact VeRL, vLLM, PyTorch, Ray and Transformers versions, plus the patches used to propagate rollout log probabilities and persistent sample identity, and any changes to policy optimization.
-- **Visual features:** encoder checkpoint, feature layer, pooling, combination of phases, normalization, and extraction/caching schedule for `visual_z`. The dataset converter does not extract these vectors, and the curriculum-enabled variants require them.
+- **Visual features:** encoder checkpoint, feature layer, pooling, combination of phases, normalization, and extraction/caching schedule for `visual_z`. The dataset converter leaves these vectors empty. The released reference extractor in `scripts/extract_qwen_visual_latents.py` fills the interface with an explicit 1024-to-384 projection per phase, AP/PVP/DP concatenation and L2 normalization; see `visual_feature_extraction.md`. Curriculum-enabled variants consume the resulting fixed seed-specific caches.
 - **Input construction:** CT preprocessing and position-selection rules, patient and group identifiers, per-phase ground-truth annotations, and the complete intended input-key set.
 - **Class counts:** actual `class_counts`, counting unit, source split, extra keys and freeze point. Metadata emitted by a new conversion describes that conversion; it does not establish what was used in an earlier experiment.
 - **Model selection:** the candidates actually evaluated, how each candidate maps to a trained policy, any reuse or refitting, and the held-out data used for selection and final evaluation.
@@ -54,5 +54,6 @@ checks that the patched gradient equals a single global masked token mean and
 that the unpatched reference gradient differs. `tests/test_rars_joint_grid.py`
 uses real evaluation/scoring over a small synthetic grid, with synthetic training
 completion and prediction receipts. It does not demonstrate exhaustive historical
-search or paper performance. Neither test suite supplies the unbundled feature
-layer/pooling/phase-fusion extraction recipe.
+search or paper performance. `tests/test_visual_feature_cache.py` additionally checks the released feature
+recipe, cache reuse/recovery, and a real local synthetic Hugging Face vision
+forward without downloading a model.

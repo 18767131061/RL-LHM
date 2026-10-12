@@ -163,13 +163,14 @@ def identities(config):
             train_rows += 1
     seed_hashes = {}
     for seed, cache in config["seed_train_files"].items():
-        ids, people, dims = set(), set(), set()
+        ids, people, dims, feature_contracts = set(), set(), set(), set()
         with Path(cache).open(encoding="utf-8") as stream:
             for line in stream:
                 if not line.strip():
                     continue
                 extra = json.loads(line).get("extra_info", {})
                 uid = extra.get("sample_uid")
+                feature_contracts.add(extra.get("visual_z_contract"))
                 vector = extra.get("visual_z")
                 if uid in ids or not isinstance(vector, list) or not vector or any(type(v) not in (int, float) or not math.isfinite(v) for v in vector) or sum(v*v for v in vector) <= 0:
                     raise ValueError("Every seed cache requires unique inputs and finite nonzero visual_z")
@@ -178,6 +179,16 @@ def identities(config):
                 dims.add(len(vector))
         if ids != train_uids or people != train_patients or len(dims) != 1:
             raise ValueError("Seed caches differ in training population or vector dimensions")
+        if feature_contracts != {None}:
+            from scripts.extract_qwen_visual_latents import CONTRACT, extract_cache
+            if feature_contracts != {CONTRACT}:
+                raise ValueError("Mixed or unsupported visual feature contracts")
+            sidecar = Path(cache).with_suffix(Path(cache).suffix + ".audit.json")
+            audit = json.loads(sidecar.read_text())
+            identity = audit["identity"]
+            extract_cache(identity["input_path"], cache, config["seed_model_paths"][seed],
+                          identity["image_root"], identity["device"], identity["dtype"],
+                          validate_only=True)
         seed_hashes[seed] = sha(cache)
     manifest = json.loads(Path(config["validation_manifest"]).read_text())
     classes, patients, groups = validate_manifest(manifest)

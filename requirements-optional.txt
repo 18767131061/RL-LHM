@@ -1,6 +1,6 @@
 # Optional model inference, plotting, and external RL-runtime adapters.
 torch>=2.1
-transformers>=4.45
+transformers==4.57.1
 Pillow>=10
 matplotlib>=3.8
 tqdm>=4.66

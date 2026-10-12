@@ -2,6 +2,7 @@
 
 | Concept | Code | CPU contract |
 | --- | --- | --- |
+| Fixed reference visual cache | `scripts/extract_qwen_visual_latents.py`, `models/assets/qwen3vl_projection_1024x384_v1.npy` | `tests/test_visual_feature_cache.py` (PyTorch; real small HF vision forward with Transformers 4.57.1) |
 | SHAE and DA-CVQ/VGS | `rl/core.py`, `rl/verl_lhm_extensions.py` | `tests/test_rl_core.py` |
 | Persistent sample identity and per-visit rollout groups | `rl/patch_verl_sample_uid.py`, `rl/verl_lhm_extensions.py`, `training/verl_lhm_launcher.py` | `tests/test_verl_sample_uid.py` (PyTorch; exact-reference integration when supplied) |
 | RARS | `rewards/rars.py` | `tests/test_rars_weights.py` |

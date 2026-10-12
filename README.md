@@ -110,5 +110,5 @@ identified validation outputs, and refuses an exhaustive freeze until every
 candidate has all five seed scores. The current [training contract](docs/training_pipeline.md)
 fixes token-level PPO clipping and one global masked token denominator for both
 policy and KL losses, with version-restricted VeRL patches. Synthetic CPU checks
-are not historical search or training reproduction. The SFT visual-feature
-extraction recipe remains an external requirement.
+are not historical search or training reproduction. The [released reference extractor](docs/visual_feature_extraction.md) supplies
+the SFT visual-feature cache preparation and integrity checks.
