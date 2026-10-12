@@ -18,9 +18,9 @@ from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 try:
-    from .resume import ResumeGuard, file_sha256, inference_identity
+    from .resume import ResumeGuard, file_sha256, inference_identity, output_center
 except ImportError:
-    from resume import ResumeGuard, file_sha256, inference_identity
+    from resume import ResumeGuard, file_sha256, inference_identity, output_center
 
 
 def set_seed(seed: int) -> None:
@@ -123,6 +123,7 @@ def main() -> None:
     if len(expected_keys) != len(set(expected_keys)):
         raise RuntimeError("Duplicate logical_key/slice_index samples in test JSONL")
     expected = set(expected_keys)
+    centers = {sample_key(row): output_center(row["metadata"]) for row in rows}
     settings = {"seed": args.seed, "device": args.device,
                 "max_new_tokens": args.max_new_tokens,
                 "image_max_pixels": args.image_max_pixels,
@@ -233,7 +234,7 @@ def main() -> None:
                     "class": metadata["class"],
                     "slice_index": metadata["slice_index"],
                     "positive": int(metadata["positive"]),
-                    "analysis_center": metadata["analysis_center"],
+                    "analysis_center": centers[key],
                     "a": image_paths[0],
                     "p": image_paths[1],
                     "v": image_paths[2],

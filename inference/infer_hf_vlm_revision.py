@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import random
 import shutil
 from pathlib import Path
@@ -22,6 +23,12 @@ try:
     from transformers import AutoModelForVision2Seq
 except ImportError:  # pragma: no cover - depends on the installed transformers version
     AutoModelForVision2Seq = None
+
+
+try:
+    from .resume import ResumeGuard, file_sha256, inference_identity, output_center
+except ImportError:
+    from resume import ResumeGuard, file_sha256, inference_identity, output_center
 
 
 FIELDNAMES = [
@@ -228,6 +235,7 @@ def main() -> None:
     partial = output.with_suffix(output.suffix + ".partial")
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    source_sha = file_sha256(json_path)
     with json_path.open(encoding="utf-8") as stream:
         rows = [json.loads(line) for line in stream if line.strip()]
     if args.limit is not None:
@@ -238,9 +246,20 @@ def main() -> None:
     if len(expected_keys) != len(set(expected_keys)):
         raise RuntimeError("Duplicate logical_key/slice_index samples in test JSONL")
     expected = set(expected_keys)
+    centers = {sample_key(row): output_center(row_metadata(row)) for row in rows}
+    settings = {"seed": args.seed, "device": args.device,
+                "max_new_tokens": args.max_new_tokens,
+                "image_max_pixels": args.image_max_pixels,
+                "image_min_pixels": args.image_min_pixels, "do_sample": False, "limit": args.limit}
+    identity = inference_identity(model_dir, json_path, data_root, rows, settings, entry_path=__file__)
+    if identity["input_sha256"] != source_sha:
+        raise RuntimeError("Input changed while it was read")
+    guard = ResumeGuard(output, identity)
     if output.is_file():
         completed_output = read_completed(output, expected)
         if completed_output == expected:
+            guard.checkpoint(output, complete=True)
+            guard.close()
             print(f"[inference] complete output already exists: {output}")
             return
         raise RuntimeError(f"Incomplete final output must not be resumed in place: {output}")
@@ -275,6 +294,9 @@ def main() -> None:
         writer = csv.DictWriter(stream, fieldnames=FIELDNAMES)
         if not completed:
             writer.writeheader()
+            stream.flush()
+            os.fsync(stream.fileno())
+            guard.checkpoint(partial)
         for row in tqdm(rows, desc=f"{model_dir.name} inference"):
             metadata = row_metadata(row)
             key = sample_key(row)
@@ -326,7 +348,7 @@ def main() -> None:
                     "class": metadata["class"],
                     "slice_index": metadata["slice_index"],
                     "positive": int(metadata["positive"]),
-                    "analysis_center": metadata["analysis_center"],
+                    "analysis_center": centers[key],
                     "a": image_paths[0],
                     "p": image_paths[1],
                     "v": image_paths[2],
@@ -335,12 +357,18 @@ def main() -> None:
                 }
             )
             stream.flush()
+            os.fsync(stream.fileno())
+            guard.checkpoint(partial)
 
     final_keys = read_completed(partial, expected)
     missing = expected - final_keys
     if missing:
         raise RuntimeError(f"Inference ended with missing samples: {sorted(missing)[:5]}")
+    if inference_identity(model_dir, json_path, data_root, rows, settings, entry_path=__file__) != identity:
+        raise RuntimeError("Model, input or images changed during inference")
     shutil.move(str(partial), str(output))
+    guard.checkpoint(output, complete=True)
+    guard.close()
 
 
 if __name__ == "__main__":

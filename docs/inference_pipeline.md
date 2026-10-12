@@ -10,12 +10,15 @@ Supply `--model-dir`, `--json-path`, `--data-root`, and `--output` explicitly.
 These commands require compatible optional model dependencies and local
 weights. They do not construct a CT-position selection procedure.
 
-The Qwen entry point writes an output-specific `.resume.json` sidecar and an OS
+Both inference entry points write an output-specific `.resume.json` sidecar and an OS
 lock. Resume and completed-output reuse require identical model/processor/tokenizer
 files, input JSONL, referenced images, seed, generation settings, implementation
 and runtime versions. Each flushed CSV row is committed by byte count and SHA-256.
 Changed, truncated or uncommitted output bytes and older outputs without the
 sidecar require a new output path; sample-key equality alone is insufficient.
+The HF canary row limit is also part of the identity. Center metadata may use
+`center_id` or `analysis_center`; when both are present they must agree. The
+CSV retains that value in `analysis_center`.
 
 For evaluation, convert each inference row to the `group_id`, `raw`, and
 `completion_nll` record defined in `metrics_pipeline.md`. Join the identifier

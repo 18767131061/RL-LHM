@@ -17,7 +17,7 @@ def file_sha256(path):
     return value.hexdigest()
 
 
-def inference_identity(model_dir, input_path, data_root, rows, settings):
+def inference_identity(model_dir, input_path, data_root, rows, settings, *, entry_path=None):
     model_dir, input_path, data_root = map(lambda p: Path(p).resolve(),
                                           (model_dir, input_path, data_root))
     # Include weights, model/processor/generation configuration, tokenizer files
@@ -47,8 +47,20 @@ def inference_identity(model_dir, input_path, data_root, rows, settings):
             "input_path": str(input_path), "input_sha256": file_sha256(input_path),
             "data_root": str(data_root), "images": images, "settings": settings,
             "runtime_packages": versions,
-            "entry_sha256": file_sha256(Path(__file__).with_name("infer_qwen_real961.py")),
+            "entry_sha256": file_sha256(entry_path or Path(__file__).with_name("infer_qwen_real961.py")),
             "resume_sha256": file_sha256(__file__)}
+
+
+def output_center(metadata: dict) -> str | None:
+    """Accept the converter's two center aliases without inventing a center."""
+    values = [metadata[key] for key in ("center_id", "analysis_center")
+              if metadata.get(key) is not None]
+    if not values:
+        return None
+    if any(not isinstance(value, str) or not value.strip() or value != value.strip()
+           for value in values) or len(set(values)) != 1:
+        raise ValueError("Inconsistent or invalid center_id/analysis_center metadata")
+    return values[0]
 
 
 class ResumeGuard:
