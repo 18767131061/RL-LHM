@@ -85,3 +85,16 @@ def test_inconsistent_patient_truth_fails_closed() -> None:
             ],
             CLASSES,
         )
+
+
+@pytest.mark.parametrize("records, expected, tied", [
+    ([VoteRecord("B", 50.)], "B", False),
+    ([VoteRecord("A", 50.), VoteRecord("B", 49.)], "B", False),
+    ([VoteRecord("B", 50.), VoteRecord("C", 50.)], "B", True),
+    ([VoteRecord("B", math.nan), VoteRecord("B", 50.), VoteRecord("A", 50.)], "B", False),
+    ([VoteRecord("B", math.inf)], "B", False),
+])
+def test_weighted_vote_handles_tiny_weights_without_unvoted_or_false_ties(records, expected, tied):
+    result = aggregate_patient(records, CLASSES, LIKELIHOOD_WEIGHTED_VOTE)
+    assert result.prediction == expected
+    assert result.tied is tied

@@ -7,6 +7,7 @@ import argparse
 import csv
 import json
 import math
+import os
 import random
 import shutil
 from pathlib import Path
@@ -15,6 +16,11 @@ import numpy as np
 import torch
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor
+
+try:
+    from .resume import ResumeGuard, file_sha256, inference_identity
+except ImportError:
+    from resume import ResumeGuard, file_sha256, inference_identity
 
 
 def set_seed(seed: int) -> None:
@@ -110,16 +116,27 @@ def main() -> None:
     partial = output.with_suffix(output.suffix + ".partial")
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    source_sha = file_sha256(json_path)
     with json_path.open(encoding="utf-8") as stream:
         rows = [json.loads(line) for line in stream if line.strip()]
     expected_keys = [sample_key(row) for row in rows]
     if len(expected_keys) != len(set(expected_keys)):
         raise RuntimeError("Duplicate logical_key/slice_index samples in test JSONL")
     expected = set(expected_keys)
+    settings = {"seed": args.seed, "device": args.device,
+                "max_new_tokens": args.max_new_tokens,
+                "image_max_pixels": args.image_max_pixels,
+                "image_min_pixels": args.image_min_pixels, "do_sample": False}
+    identity = inference_identity(model_dir, json_path, data_root, rows, settings)
+    if identity["input_sha256"] != source_sha:
+        raise RuntimeError("Input changed while it was read")
+    guard = ResumeGuard(output, identity)
 
     if output.is_file():
         completed_output = read_completed(output, expected)
         if completed_output == expected:
+            guard.checkpoint(output, complete=True)
+            guard.close()
             print(f"[inference] complete output already exists: {output}")
             return
         raise RuntimeError(f"Incomplete final output must not be resumed in place: {output}")
@@ -153,6 +170,9 @@ def main() -> None:
         writer = csv.DictWriter(stream, fieldnames=FIELDNAMES)
         if not completed:
             writer.writeheader()
+            stream.flush()
+            os.fsync(stream.fileno())
+            guard.checkpoint(partial)
         for row in tqdm(rows, desc="real961 inference"):
             metadata = row["metadata"]
             key = sample_key(row)
@@ -222,12 +242,18 @@ def main() -> None:
                 }
             )
             stream.flush()
+            os.fsync(stream.fileno())
+            guard.checkpoint(partial)
 
     final_keys = read_completed(partial, expected)
     missing = expected - final_keys
     if missing:
         raise RuntimeError(f"Inference ended with missing samples: {sorted(missing)[:5]}")
+    if inference_identity(model_dir, json_path, data_root, rows, settings) != identity:
+        raise RuntimeError("Model, input or images changed during inference")
     shutil.move(str(partial), str(output))
+    guard.checkpoint(output, complete=True)
+    guard.close()
 
 
 if __name__ == "__main__":

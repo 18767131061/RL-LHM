@@ -1,4 +1,6 @@
 import copy
+import json
+import math
 
 import pytest
 
@@ -53,8 +55,8 @@ def test_default_matrices_match_frozen_selected_profiles() -> None:
     assert public["ICC"]["CRLM"] == 1.10
     assert public["BCLM"]["CRLM"] == 0.90
 
-    assert all(value == 0.5600 for row in uniform_matrix("private").values() for value in row.values())
-    assert all(value == 0.7100 for row in uniform_matrix("public").values() for value in row.values())
+    assert all(value == 0.4 for row in uniform_matrix("private").values() for value in row.values())
+    assert all(value == 0.4 for row in uniform_matrix("public").values() for value in row.values())
     assert set(public) == set(PUBLIC_CLASSES)
 
 
@@ -106,3 +108,53 @@ def test_risk_freeze_hashes_and_rejects_tampering(tmp_path) -> None:
     tampered["selected_profile"]["shared_other"] = 9.0
     with pytest.raises(ValueError, match="profile hash"):
         validate_risk_freeze(tampered)
+
+
+@pytest.mark.parametrize("cohort,data_mode,classes", [
+    ("private", "private", PRIVATE_CLASSES), ("public", "5cls", PUBLIC_CLASSES),
+])
+def test_uniform_control_actual_reward_uses_point_four(cohort, data_mode, classes, monkeypatch):
+    from rewards.verl_liver_reward import compute_score
+    monkeypatch.setenv("RL_LHM_REWARD_MODE", "rars")
+    monkeypatch.setenv("RL_LHM_RISK_MATRIX_MODE", "uniform")
+    monkeypatch.setenv("RL_LHM_RISK_MATRIX_SCALE", "1.0")
+    counts = {label: 10 for label in classes}
+    truth = {"gt_dets": [{"phase": phase, "label": "ICC", "bbox": [0,0,10,10]}
+                         for phase in ("a", "p", "v")]}
+    completion = json.dumps({"detections": [{"phase": phase, "label": "HCC", "bbox_2d": [0,0,10,10]}
+                                           for phase in ("a", "p", "v")]})
+    active = compute_score(None, completion, truth,
+                           {"data_mode": data_mode, "class_counts": counts, "seq_confidence": .5})
+    penalty, multiplier = build_rars_confusion_cost("HCC", "ICC", .5, counts,
+                                                    default_matrix(cohort), matrix_mode="uniform")
+    assert multiplier == pytest.approx(math.exp(.5 * .4))
+    assert active["severity_factor_max"] == pytest.approx(multiplier)
+    assert active["cls_score"] == pytest.approx(-penalty)
+    monkeypatch.setenv("RL_LHM_REWARD_MODE", "vanilla")
+    assert compute_score(None, completion, truth,
+                         {"data_mode": data_mode, "class_counts": counts, "seq_confidence": .5})["cls_score"] == -1.
+
+
+@pytest.mark.parametrize('outside_count', [17, -1])
+def test_class_count_metadata_is_copied_and_all_keys_contribute(outside_count, monkeypatch):
+    from rewards.verl_liver_reward import compute_score as active_reward
+    from rewards.full_reward import compute_score as reference_reward, RewardConfig
+    monkeypatch.setenv('RL_LHM_REWARD_MODE', 'rars')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_MODE', 'ordinal')
+    monkeypatch.setenv('RL_LHM_RISK_MATRIX_SCALE', '1.0')
+    monkeypatch.delenv('RL_LHM_RISK_PROFILE', raising=False)
+    metadata = {'data_mode': 'private', 'class_counts': {'HCC': 10, 'ICC': 2, 'outside': outside_count},
+                'seq_confidence': .5}
+    original = copy.deepcopy(metadata)
+    truth = {'gt_dets': [{'phase': phase, 'label': 'ICC', 'bbox': [0,0,10,10]} for phase in ('a','p','v')]}
+    completion = json.dumps({'detections': [{'phase': phase, 'label': 'HCC', 'bbox_2d': [0,0,10,10]}
+                                           for phase in ('a','p','v')]})
+    active = active_reward(None, completion, truth, metadata)
+    reference = reference_reward(completion, truth, extra_info=metadata,
+                                 config=RewardConfig(data_mode='private_5class'))
+    # Three missing active classes each get count one; extra keys stay in the sum.
+    expected = -((15 + outside_count) / (2 + 1e-6)) ** .35 * math.exp(.5 * 1.1) * (1 + .75 * .5)
+    assert active['cls_score'] == pytest.approx(expected)
+    assert reference['classification_reward'] == pytest.approx(expected)
+    assert reference['reward_raw'] == pytest.approx(active['reward_raw'])
+    assert metadata == original

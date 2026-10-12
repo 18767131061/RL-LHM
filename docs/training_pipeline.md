@@ -59,6 +59,11 @@ This adds `real961_rl_refit_train_validation.jsonl`; it never substitutes combin
 
 RARS off selects the existing `vanilla` reward mode; SHAE off selects the existing GRPO estimator; DA-CVQ/VGS off omits the custom curriculum sampler. DA-CVQ and VGS remain one coupled factor. The previously exposed five names keep their component settings and numeric hyperparameters. All combinations retain the existing learning rate `1e-6`, clipping `0.20`, KL coefficient `0.01`, two completions per prompt, and six formal epochs.
 
+The Uniform severity control uses `--risk-matrix-mode uniform` with the default
+`--risk-matrix-scale 1.0`: every off-diagonal severity is 0.4, so its multiplier
+is `exp(0.5 * 0.4)`. RARS-off sets the complete diagnostic-mismatch cost to one;
+it is distinct from this Uniform control.
+
 The following loop writes one manifest per combination without importing VeRL, checking GPUs, or loading model weights:
 
 ```bash

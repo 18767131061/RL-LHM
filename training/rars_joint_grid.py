@@ -6,6 +6,7 @@ It never treats a dry run or an incomplete search as historical search evidence.
 """
 from __future__ import annotations
 import argparse
+import copy
 import hashlib
 import json
 import math
@@ -143,10 +144,24 @@ def load_config(path):
     return config
 
 
+def training_row_digest(row):
+    """Bind each persistent input to its data, allowing seed-specific features."""
+    payload = copy.deepcopy(row)
+    metadata = [payload.get("extra_info")]
+    if isinstance(payload.get("reward_model"), dict):
+        metadata.append(payload["reward_model"].get("extra_info"))
+    for extra in metadata:
+        if isinstance(extra, dict):
+            for key in ("visual_z", "visual_z_contract", "visual_z_cache_id"):
+                extra.pop(key, None)
+    return digest(payload)
+
+
 def identities(config):
     from evaluation.evaluate_paper_protocol import validate_manifest
     train_patients, train_uids = set(), set()
     train_rows = 0
+    train_payloads = {}
     with Path(config["train_file"]).open(encoding="utf-8") as f:
         for line in f:
             if not line.strip():
@@ -160,15 +175,18 @@ def identities(config):
                 raise ValueError("LOCO training row is not from training_center")
             train_patients.add(patient)
             train_uids.add(uid)
+            train_payloads[uid] = training_row_digest(row)
             train_rows += 1
     seed_hashes = {}
+    feature_dimension = None
     for seed, cache in config["seed_train_files"].items():
         ids, people, dims, feature_contracts = set(), set(), set(), set()
         with Path(cache).open(encoding="utf-8") as stream:
             for line in stream:
                 if not line.strip():
                     continue
-                extra = json.loads(line).get("extra_info", {})
+                row = json.loads(line)
+                extra = row.get("extra_info", {})
                 uid = extra.get("sample_uid")
                 feature_contracts.add(extra.get("visual_z_contract"))
                 vector = extra.get("visual_z")
@@ -177,8 +195,14 @@ def identities(config):
                 ids.add(uid)
                 people.add(extra.get("patient_id"))
                 dims.add(len(vector))
+                if train_payloads.get(uid) != training_row_digest(row):
+                    raise ValueError("Seed cache changes an input's patient, image, target or metadata")
         if ids != train_uids or people != train_patients or len(dims) != 1:
             raise ValueError("Seed caches differ in training population or vector dimensions")
+        dimension = next(iter(dims))
+        if feature_dimension is not None and dimension != feature_dimension:
+            raise ValueError("Seed caches have different visual feature dimensions")
+        feature_dimension = dimension
         if feature_contracts != {None}:
             from scripts.extract_qwen_visual_latents import CONTRACT, extract_cache
             if feature_contracts != {CONTRACT}:
@@ -213,7 +237,8 @@ def identities(config):
     validation_uids = {group["group_id"] for group in groups}
     if not train_rows or not groups or train_patients & patients.keys() or train_patients & set(test_ids) or patients.keys() & set(test_ids) or train_uids & validation_uids:
         raise ValueError("Training/validation/test identities overlap or a required split is empty")
-    return {"seed_train_sha256": seed_hashes, "train_sha256": sha(config["train_file"]), "validation_sha256": sha(config["validation_manifest"]),
+    return {"seed_train_sha256": seed_hashes, "training_payload_sha256": digest(train_payloads),
+            "feature_dimension": feature_dimension, "train_sha256": sha(config["train_file"]), "validation_sha256": sha(config["validation_manifest"]),
             "test_identity_sha256": sha(config["test_identity_manifest"]), "train_rows": train_rows,
             "train_patients": len(train_patients), "validation_patients": len(patients),
             "test_patients": len(test_ids), "classes": classes}

@@ -148,7 +148,8 @@ def classification_reward(
     config: RewardConfig,
 ) -> tuple[float, int, float]:
     classes = class_space(config.data_mode)
-    normalized_counts = {label: max(1, int(class_counts.get(label, 1))) for label in classes}
+    normalized_counts = dict(class_counts)
+    normalized_counts.update({label: max(1, int(class_counts.get(label, 1))) for label in classes})
     matrix = default_matrix("private" if config.data_mode == "private_5class" else "public")
     reward = 0.0
     eligible = 0

@@ -344,7 +344,7 @@ def get_risk_severity(pred_label: str, true_label: str, data_mode: str, matrix_m
     if pred_label == true_label or matrix_mode == "zero":
         return 0.0
     if matrix_mode == "uniform":
-        return 1.0
+        return 0.4
     profile_path = os.environ.get("RL_LHM_RISK_PROFILE")
     if profile_path:
         profile = _explicit_risk_profile(profile_path)
@@ -399,7 +399,7 @@ def compute_score(data_source, solution_str, ground_truth, extra_info=None, **kw
 
     try:
         data_mode = extra_info.get("data_mode", "5cls")
-        class_counts = extra_info.get("class_counts", {})
+        class_counts = dict(extra_info.get("class_counts", {}))
         reward_mode = os.environ.get("RL_LHM_REWARD_MODE", "rars").lower()
         matrix_mode = os.environ.get("RL_LHM_RISK_MATRIX_MODE", "ordinal").lower()
         matrix_scale = float(os.environ.get("RL_LHM_RISK_MATRIX_SCALE", "1.0"))

@@ -211,6 +211,7 @@ class TrainingDataCliTests(unittest.TestCase):
         self.assertFalse(output.exists())
 
     def test_all_eight_factorial_variants_through_actual_config_only_cli(self):
+        from rl.policy_contract import verify_overrides
         prepared, _ = self.convert()
         seen = set()
         for variant, factors in VARIANT_FACTORS.items():
@@ -220,6 +221,11 @@ class TrainingDataCliTests(unittest.TestCase):
                 self.assertEqual(manifest["components"], {"reward": "rars" if rars else "vanilla", "shae": shae, "vgs": curriculum})
                 self.assertEqual(manifest["runtime_environment"]["RL_LHM_REWARD_MODE"], "rars" if rars else "vanilla")
                 command = manifest["command"]
+                # Pass the generated argv through the actual prelaunch guard,
+                # including non-policy keys that can accidentally be duplicated.
+                verify_overrides(command[2:])
+                workers = [arg for arg in command if arg.startswith("data.dataloader_num_workers=")]
+                self.assertEqual(workers, [f"data.dataloader_num_workers={0 if curriculum else 2}"])
                 self.assertIn("algorithm.adv_estimator=" + ("shae" if shae else "grpo"), command)
                 self.assertEqual("+data.sampler.use_vgs=True" in command, curriculum)
                 self.assertEqual("+algorithm.shae_gate_mid=0.05" in command, shae)

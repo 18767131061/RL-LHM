@@ -680,7 +680,7 @@ def main() -> None:
         "data.filter_overlong_prompts=True",
         "data.truncation=error",
         "data.shuffle=True",
-        "data.dataloader_num_workers=2",
+        f"data.dataloader_num_workers={0 if config['vgs'] else 2}",
         f"data.seed={args.seed}",
         "+data.apply_chat_template_kwargs.enable_thinking=False",
         f"reward.custom_reward_function.path={required['reward']}",
@@ -771,7 +771,6 @@ def main() -> None:
     if config["vgs"]:
         overrides.extend(
             [
-                "data.dataloader_num_workers=0",
                 f"data.sampler.class_path=file://{required['extensions']}",
                 "data.sampler.class_name=VLGSHybridSampler",
                 "+data.sampler.use_vgs=True",

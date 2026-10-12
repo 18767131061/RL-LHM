@@ -159,3 +159,32 @@ def test_formal_subset_rejected_and_loco_axes_must_be_explicit(tmp_path):
     payload["loco_pairs"] = [["HCC","FNH"]]
     write_json(path,payload)
     with pytest.raises(ValueError, match="active classes"):load_config(path)
+
+
+@pytest.mark.parametrize('fault',['patient_mapping','image','ground_truth','dimension'])
+def test_seed_payload_conflict(tmp_path,fault):
+    cfg=configuration(tmp_path)
+    rows=[{'extra_info':{'sample_uid':'train-a','patient_id':'patient-a','visual_z':[1.,0.]},'images':['a.png'],'reward_model':{'ground_truth':'HCC'}},
+          {'extra_info':{'sample_uid':'train-b','patient_id':'patient-b','visual_z':[0.,1.]},'images':['b.png'],'reward_model':{'ground_truth':'ICC'}}]
+    for cache in cfg['seed_train_files'].values():Path(cache).write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    changed=copy.deepcopy(rows)
+    if fault=='patient_mapping':
+        changed[0]['extra_info']['patient_id'],changed[1]['extra_info']['patient_id']='patient-b','patient-a'
+    elif fault=='image':changed[0]['images']=['different.png']
+    elif fault=='ground_truth':changed[0]['reward_model']['ground_truth']='ICC'
+    elif fault=='dimension':
+        for row in changed:row['extra_info']['visual_z'].append(0.)
+    Path(cfg['seed_train_files']['2026']).write_text(''.join(json.dumps(row)+'\n' for row in changed))
+    with pytest.raises(ValueError):Search(cfg,tmp_path/'s.db')
+
+
+def test_seed_features_may_change_without_changing_training_payload(tmp_path):
+    cfg = configuration(tmp_path)
+    cache = Path(cfg["seed_train_files"]["2026"])
+    row = json.loads(cache.read_text())
+    row["extra_info"]["visual_z"] = [0., 1.]
+    row["extra_info"]["visual_z_cache_id"] = "different-seed-feature-cache"
+    cache.write_text(json.dumps(row) + "\n")
+    search = Search(cfg, tmp_path / "search.db")
+    assert search.identity["feature_dimension"] == 2
+    assert len(search.identity["training_payload_sha256"]) == 64

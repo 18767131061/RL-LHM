@@ -30,7 +30,7 @@ RISK_SEVERITY_MATRIX_PUBLIC = {
     "CRLM": {"HCC": 0.40, "ICC": 1.10, "HA_Hemangioma": 0.40, "BCLM": 0.90},
 }
 
-UNIFORM_RISK_WEIGHT = {"private": 0.5600, "public": 0.7100}
+UNIFORM_RISK_WEIGHT = {"private": 0.4, "public": 0.4}
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ def risk_severity(
     if predicted_label == true_label or matrix_mode == "zero":
         return 0.0
     if matrix_mode == "uniform":
-        return 1.0
+        return 0.4
     if matrix_mode != "ordinal":
         raise ValueError(f"Unsupported matrix mode: {matrix_mode}")
     return float(matrix.get(true_label, {}).get(predicted_label, 0.0))
@@ -88,7 +88,7 @@ def build_rars_confusion_cost(
         raise ValueError(f"Unsupported reward mode: {reward_mode}")
     if not math.isfinite(matrix_scale) or matrix_scale < 0.0:
         raise ValueError("Matrix scale must be finite and non-negative")
-    total = max(1, sum(max(0, int(value)) for value in class_counts.values()))
+    total = max(1, sum(int(value) for value in class_counts.values()))
     true_count = max(1, int(class_counts.get(true_label, 1)))
     scarcity = (total / (true_count + parameters.count_epsilon)) ** parameters.scarcity_alpha
     calibrated = 1.0 + parameters.confidence_eta * min(1.0, max(0.0, float(confidence)))

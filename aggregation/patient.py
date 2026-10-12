@@ -86,7 +86,8 @@ def aggregate_patient(
             numeric = fallback if nll is None else nll
             totals[record.prediction] += math.exp(-max(-50.0, min(50.0, numeric)))
         best = max(totals.values())
-        weighted_ties = [label for label in classes if abs(totals[label] - best) <= 1e-12]
+        weighted_ties = [label for label in classes if counts[label] > 0
+                         and abs(totals[label] - best) <= 1e-12 * best]
         return AggregationResult(weighted_ties[0], len(valid), len(weighted_ties) > 1, False)
 
     if strategy == BEST_LIKELIHOOD_INPUT:

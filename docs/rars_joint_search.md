@@ -16,7 +16,9 @@ population-optimality claim and supplies no historical runtime or total wall tim
 Copy `configs/rars_grid.example.json` outside the repository and replace its
 paths. The five `seed_train_files` contain the same training patient/group
 population and the visual cache extracted from the corresponding seed's SFT
-checkpoint. The five `seed_model_paths` point to those SFT checkpoints. The
+checkpoint. Each persistent UID must retain the same patient, images, targets and
+other non-feature fields across all five caches; visual feature values and cache
+identifiers may differ by seed, but their dimensions must agree. The five `seed_model_paths` point to those SFT checkpoints. The
 feature layer, pooling and phase-fusion recipe must be supplied from the actual
 extraction implementation; this runner does not invent or perform extraction.
 
