@@ -13,5 +13,7 @@
 | Paper-protocol evaluation CLI | `evaluation/evaluate_paper_protocol.py` | `tests/test_paper_protocol_cli.py` |
 | Separate train/validation preparation and eight configurations | `preprocess/build_verl_real961_dataset.py`, `training/run_verl_lhm_variant.py` | `tests/test_training_data_cli.py` |
 | Reward-loop source patch | `rl/patch_verl_agent_loop_logprobs.py` | `tests/test_training_data_cli.py` (synthetic source only) |
+| Existing 60-comparison display, eight factorial settings plus Uniform, full-coverage aggregation view | `evaluation/table_presentation.py` | `tests/test_table_presentation.py` (artificial aggregate fixtures; original fields retained) |
+| Configuration helpers without optional Torch | `rl/__init__.py`, `rl/policy_contract.py` | `tests/test_optional_rl_import.py` (same exported objects when Torch is installed) |
 
 The table describes the final public 2D scope. GPU training and model inference remain environment-dependent.

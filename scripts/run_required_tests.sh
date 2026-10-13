@@ -13,4 +13,5 @@ TESTS=(tests/test_iou.py tests/test_hungarian_matching.py tests/test_three_match
 if [[ "${1:-}" != "--cpu-only" ]]; then
   TESTS+=(tests/test_preprocess_and_inference.py tests/test_rl_core.py tests/test_verl_sample_uid.py tests/test_policy_contract.py tests/test_reward_manager_integration.py tests/test_visual_feature_cache.py tests/test_inference_resume.py)
 fi
+TESTS+=(tests/test_table_presentation.py tests/test_optional_rl_import.py)
 PYTHONDONTWRITEBYTECODE=1 "$PYTHON_BIN" -m pytest "${TESTS[@]}" -q -p no:cacheprovider 2>&1 | tee "$LOG_DIR/required_tests.log"

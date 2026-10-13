@@ -84,6 +84,12 @@ See `docs/metrics_pipeline.md` for the complete input/output contract. The CLI t
 
 Use `evaluation/classification.py`, `evaluation/detection.py`, `aggregation/patient.py`, and `statistics/` directly when integrating another pipeline. `scripts/plot_rars.py` renders a supplied RARS grid; it does not contain paper data.
 
+For table presentation, [the aggregate-result view](docs/table_presentation.md)
+keeps each paired statistic beside its cohort/comparator/endpoint identity,
+separates Uniform from the eight factorial settings, and hides redundant
+aggregation columns only after checking all five seeds' full coverage. Original
+source fields and seed-specific confidence intervals remain available.
+
 ## Reproducibility and limitations
 
 Run the full test suite after installing its optional dependencies:
