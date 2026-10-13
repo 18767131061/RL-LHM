@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Build an audited phase-image Ultralytics dataset from frozen real961 JSONL."""
+"""Export private development phase images from prepared real961 JSONL.
+
+The 654+117 patient union is assigned to both train/val YAML entries. This
+preparation export does not specify any detector's actual fitting population
+or independently validate training/checkpoint selection. Test patients remain
+separate. See docs/paper_comparison_settings.md for downstream interfaces."""
 
 from __future__ import annotations
 

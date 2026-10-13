@@ -114,7 +114,12 @@ def write_verl(rows: list[dict], output: Path, source: str, class_counts: dict[s
 
 
 def class_counts_for(rows: list[dict]) -> dict[str, int]:
-    """Count positive input groups by the current converter's majority label."""
+    """Count each positive group once by its most frequent GT label.
+
+    The caller supplies the fitting rows. Missing classes and background groups
+    add no keys; different groups from one patient count separately.
+    `unpack` resolves equal frequencies by lexicographically greatest label.
+    """
     return dict(sorted(Counter(row["gt_major"] for row in rows if row["gt_major"] is not None).items()))
 
 

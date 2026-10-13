@@ -29,7 +29,7 @@ The default outputs are:
 
 The converter rejects overlap in either supplied `patient_id` or `statistical_patient_id`, duplicate input-group UIDs, empty training sources, and explicitly supplied empty validation sources. It preserves the caller's source partition; it does not establish how that partition was created.
 
-For this converter, `class_counts` counts **positive three-phase input groups by `gt_major`**, not patients or individual lesion records. `gt_major` is the most frequent active lesion-record label in a group; equal counts use the lexical maximum label. Background groups and zero-count classes are omitted. The default training, validation, and monitor files all carry counts derived only from the supplied training source. The metadata documents this conversion policy; it does not establish the original cohort-specific dictionary values or their source split.
+For this converter, `class_counts` counts **positive three-phase input groups by `gt_major`**, not patients or individual lesion records. `gt_major` is the most frequent active lesion-record label in a group; equal counts use the lexical maximum label. Background groups and zero-count classes are omitted. The default training, validation, and monitor files all carry counts derived only from the supplied training source. The private vocabulary is HCC, ICC, FNH, HA_Hemangioma, nodule_CYST; the public `5cls` vocabulary is HCC, ICC, HA_Hemangioma, BCLM, CRLM. Observed dominant labels determine the emitted keys, so a five-class vocabulary need not yield five nonzero keys. Extra keys supplied by a caller to the reward adapter remain in its total. See [the interface map](paper_comparison_settings.md).
 
 To explicitly prepare a combined training/validation refit dataset after model selection:
 
@@ -230,4 +230,4 @@ its shared strict parser dependency.
 
 ## Joint weight selection
 
-See [rars_joint_search.md](rars_joint_search.md) for the full joint-grid task, validation, recovery and freeze interfaces. The independent single-axis sensitivity protocol is not a joint-search substitute.
+See [rars_joint_search.md](rars_joint_search.md) for the full joint-grid task, validation, recovery and freeze interfaces. This optional joint-grid interface and the paper's OAT sensitivity protocol have different configuration domains; neither specifies the historical formation order of Selected.

@@ -1,17 +1,20 @@
-# Full joint RARS selection
+# Optional joint-grid RARS search tool
 
-`training/rars_joint_grid.py` implements the finite Cartesian grid independently
-of single-axis sensitivity plots. Main private selection uses HCC–ICC, HCC–FNH,
-HCC–HH and ICC–HH. Main public selection uses HCC–ICC, HCC–HH, ICC–HH, ICC–BCLM,
-ICC–CRLM and BCLM–CRLM. HH is `HA_Hemangioma` in the schema. Each pair shares one
-weight in both directions; other off-diagonal pairs stay at 0.4.
+`training/rars_joint_grid.py` implements a finite Cartesian search over four
+private or six public unordered pair weights. Each pair shares its weight in
+both directions; unlisted off-diagonal pairs stay at 0.4 in this tool. A formal
+tool configuration supplies 15 levels from 0.1 through 1.5 and five seeds. The
+candidate/seed coverage required by `freeze` is computed from that configuration.
+This is an optional executable search interface, not the confirmed procedure
+that generated the paper's Selected profiles.
 
-Every axis has the 15 values 0.1 through 1.5. There are 50,625 private and
-11,390,625 public configurations. Each uses seeds 42, 2026, 3407, 1234 and 5678,
-for 253,125 and 56,953,125 seed trainings (57,206,250 total). The selection score
-is the arithmetic mean of five patient-level validation macro-F1 scores. This is
-an argmax within the finite specified grid; it makes no continuous/global
-population-optimality claim and supplies no historical runtime or total wall time.
+The paper separates the final Selected profiles, OAT sensitivity, and trained
+Uniform/RARS-off controls. OAT also scans the shared other-pair weight: five
+private axes and seven public axes, 15 values per axis, with other severity
+weights at 1.0. Its 75/105 axis-counted points and 375/525 seed evaluations are
+not the joint tool's candidate count. All axes pass through the same all-1.0
+profile. The Selected values coincide with observed OAT peaks; that observation
+does not specify candidate generation or selection order.
 
 Copy `configs/rars_grid.example.json` outside the repository and replace its
 paths. The five `seed_train_files` contain the same training patient/group
@@ -195,6 +198,4 @@ For tests only, `synthetic_test: true` permits a smaller subset of the same leve
 It prohibits launching model training and a formal freeze. The integration test
 uses a 2^4-by-five grid and synthetic training/inference receipts; scoring,
 coverage checks, sharding, resume and five-seed selection execute normally.
-No current script, dry run or CPU test is evidence that the reported historical
-full grid was executed. Historical search records and training versions remain
-separate evidence requirements.
+These tests validate the optional tool interface and do not generate the paper's experimental results.

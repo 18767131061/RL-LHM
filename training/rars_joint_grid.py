@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Streaming four-/six-dimensional RARS search with independent five-seed tasks.
+"""Optional four-/six-dimensional joint-grid search with five-seed tasks.
 
 This tool creates current runnable tasks and scores supplied validation outputs.
-It never treats a dry run or an incomplete search as historical search evidence.
+It does not define the historical generation order of the paper's Selected profiles.
 """
 from __future__ import annotations
 import argparse

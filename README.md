@@ -120,13 +120,24 @@ The clinical datasets and trained weights are not redistributed. Researchers mus
 
 Please cite the RL-LHM paper and see `CITATION.cff` for machine-readable citation metadata. The code written for this repository is released under the MIT License in `LICENSE`. Dependencies are installed separately and remain under their respective upstream licenses; they are not redistributed here.
 
-### Current joint-grid and policy interfaces
+### Optional search and policy interfaces
 
-The [joint-grid runner](docs/rars_joint_search.md) enumerates all four/six
+The optional [joint-grid runner](docs/rars_joint_search.md) enumerates four/six
 independent unordered pair weights, dispatches candidate/seed runs, scores only
 identified validation outputs, and refuses an exhaustive freeze until every
 candidate has all five seed scores. The current [training contract](docs/training_pipeline.md)
 fixes token-level PPO clipping and one global masked token denominator for both
-policy and KL losses, with version-restricted VeRL patches. Synthetic CPU checks
-are not historical search or training reproduction. The [released reference extractor](docs/visual_feature_extraction.md) supplies
+policy and KL losses, with version-restricted VeRL patches. The runner is not the confirmed historical selection procedure for the paper's
+Selected profiles. The [released reference extractor](docs/visual_feature_extraction.md) supplies
 the SFT visual-feature cache preparation and integrity checks.
+
+## Paper comparison and preprocessing interfaces
+
+[Method and comparison settings](docs/paper_comparison_settings.md) maps the
+Selected/OAT/controls, group-count dictionary, input construction, VLM readout,
+and detector stages to their paper locations and public entry points.
+`preprocess/build_real961_detector_dataset.py` exports the private **development**
+union (654 + 117 = 771 patients) and points both YAML train/val entries to it;
+this is not an independent training/validation split or a record of each
+model's actual fitting population. Model-specific fitting and postprocessing
+settings must be supplied explicitly for any new run.
