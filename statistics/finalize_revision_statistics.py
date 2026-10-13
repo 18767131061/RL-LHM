@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Finalize statistics for SFT, vanilla GRPO, and full RL-LHM."""
+"""Legacy statistics finalizer for the older experiment layout and metric schema.
+
+Requires classification_overall/lesion_detection with nested bootstrap intervals
+and helper scripts under the experiment root's scripts/ directory. It cannot
+directly consume evaluate_paper_protocol.py outputs. The paired-patient tool
+remains usable after explicit identity/header adaptation preserving all patients;
+see README.md's Evaluation interface notes. No automatic adapter is supplied.
+"""
 
 from __future__ import annotations
 

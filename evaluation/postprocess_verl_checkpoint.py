@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Merge, evaluate, and audit one completed formal VERL actor run."""
+"""Legacy checkpoint postprocessor using the older evaluator CLI/output contract.
+
+Passes --metadata, --bootstrap and --seed, and requires legacy outputs including
+input_predictions_joined.csv and report.md. evaluate_paper_protocol.py instead
+requires --manifest and keyed JSONL predictions and is not a drop-in replacement.
+See README.md's Evaluation interface notes; no automatic schema adapter is used.
+"""
 
 from __future__ import annotations
 

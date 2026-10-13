@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Summarize repeated-seed metrics as mean and sample SD."""
+"""Legacy repeated-seed summarizer for the pre-paper-evaluator metric schema.
+
+Requires classification_overall and lesion_detection.{class_aware,class_agnostic},
+not evaluate_paper_protocol.py's classification and per-threshold detection rows.
+Legacy class_aware is not automatically equivalent to GFCA or SCF. No schema
+adapter is supplied here; see README.md's Evaluation interface notes.
+"""
 
 from __future__ import annotations
 

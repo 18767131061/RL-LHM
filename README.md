@@ -82,7 +82,19 @@ See `docs/metrics_pipeline.md` for the complete input/output contract. The CLI t
 
 `evaluation/evaluate_sim999_predictions.py` is retained as a **legacy utility**, not the protocol evaluation entry point. Its metadata layout, GT-positive vote selection, background handling, and old `class_aware` mode differ from the protocol above. Do not use its output interchangeably with the three canonical protocols.
 
-Use `evaluation/classification.py`, `evaluation/detection.py`, `aggregation/patient.py`, and `statistics/` directly when integrating another pipeline. `scripts/plot_rars.py` renders a supplied RARS grid; it does not contain paper data.
+The following three scripts also retain **legacy interfaces**. They cannot directly consume or orchestrate the current paper evaluator's outputs:
+
+| Legacy script | Required interface |
+|---|---|
+| `aggregation/summarize_seed_results.py` | Reads `classification_overall` and `lesion_detection.{class_aware,class_agnostic}`, including flat fields such as `acc_iou_gt_0`, `acc_iou_ge_0_5`, and `mean_iou`. |
+| `statistics/finalize_revision_statistics.py` | Reads the same legacy metric structure with nested bootstrap confidence intervals; assumes the older experiment-directory layout and helper scripts under that experiment root's `scripts/` directory. |
+| `evaluation/postprocess_verl_checkpoint.py` | Calls an evaluator with `--metadata`, `--bootstrap`, and `--seed` (plus optional legacy flags), and requires `input_predictions_joined.csv` and `report.md` among its outputs. |
+
+The current `evaluation/evaluate_paper_protocol.py` instead requires `--manifest` and keyed JSONL predictions. Its `metrics.json` contains `classification` and per-threshold rows under `detection.class_agnostic`, `detection.geometry_first_class_aware` (GFCA), and `detection.same_class_priority` (SCF). It writes `patient_predictions.csv` and `input_group_audit.csv`; it does not provide the legacy confidence-interval fields or output-file set above. Renaming JSON fields is insufficient: the old `class_aware` output must not be assumed equivalent to either GFCA or SCF. Any integration must explicitly preserve matching definitions, thresholds, eligible inputs, patient denominators, and confidence-interval provenance. No automatic adapter between these interfaces is supplied.
+
+`evaluation/paired_patient_tests.py` remains usable for paired patient-level statistics, but its input CSVs require `logical_key`, `truth`, and `prediction`; the current evaluator exports `patient_id` instead of `logical_key`. Adapt that header or identity mapping only after confirming that each key identifies the same unique patient in both runs and the frozen test manifest. Preserve every manifest patient, including rows with a blank prediction because no valid diagnostic vote was available; do not filter those rows or intersect the two tables to obtain matching keys. For macro endpoints, pass the frozen evaluation's exact `macro_classes` via `--classes` rather than relying on the tool's legacy default labels. The tool checks duplicate keys, equality of the two key sets, and paired ground truth. Its `--test-manifest`/`--strict-provenance` options record the supplied manifest and require provenance metadata, but do not validate CSV patient coverage against the manifest's contents; that identity and complete-denominator check must be performed before calling the tool.
+
+Use `evaluation/classification.py`, `evaluation/detection.py`, and `aggregation/patient.py` directly when integrating another pipeline with explicit input contracts. `scripts/plot_rars.py` renders a supplied RARS grid; it does not contain paper data.
 
 For table presentation, [the aggregate-result view](docs/table_presentation.md)
 keeps each paired statistic beside its cohort/comparator/endpoint identity,
