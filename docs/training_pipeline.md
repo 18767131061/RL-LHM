@@ -48,7 +48,7 @@ This adds `real961_rl_refit_train_validation.jsonl`; it never substitutes combin
 
 The alternative `--loco-source-jsonl` input contains prepared groups from one source center. Every group must have consistent center metadata, `patient_id`, `statistical_patient_id`, and an explicit patient reference diagnosis in `metadata.class`. The reference diagnosis stratifies patients; the group majority still determines scarcity counts. All groups from a patient stay together. Within each reference class, patients are ordered by SHA256 of `seed:patient_id`. The validation count is `min(n-1, max(1, round(n*fraction)))` using Python rounding, with an explicit fraction strictly between 0 and 0.5. Singleton strata fail because both fitting and validation need a member; realized per-class allocations are written to `audit.json`.
 
-Supply the validation fraction and split seed for the intended run; this interface provides no historical LOCO defaults. The shell variables below are required inputs, not recovered experimental values:
+Supply the validation fraction and split seed explicitly. Set the required shell variables below for the intended run:
 
 ```bash
 python preprocess/build_verl_real961_dataset.py \
@@ -65,7 +65,7 @@ The reserved-test file contains `split: "test"` and unique `patients` entries wi
 
 Alongside the training, validation, monitor and audit files above, this mode writes `validation_manifest.json` for canonical patient evaluation and `validation_source.jsonl` for the prepared-group inference interface. The manifest keeps the patient reference diagnosis separate from phase-level ground truth. Training and validation records share counts computed only from the source fitting groups. Add `--refit-train-validation` only when explicitly preparing the separate source union: its counts are recomputed, and its file does not replace the fitting file. Source patient allocation, active classes, final fitting scope and artifact hashes are recorded in `audit.json`.
 
-Use that audit as `preparation_audit` in the [joint search](rars_joint_search.md). Extract one cache per seed from the fitting file and its matching SFT checkpoint; the runner binds every non-feature payload field, including counts, across seeds and to the prepared file. This gives an executable current protocol once the caller supplies source groups and explicit configuration; it does not establish the historical LOCO fraction, seed or refit choice.
+Use that audit as `preparation_audit` in the [joint search](rars_joint_search.md). Extract one cache per seed from the fitting file and its matching SFT checkpoint; the runner binds every non-feature payload field, including counts, across seeds and to the prepared file. The caller supplies source groups, split fraction and seed, and any refit choice as explicit configuration.
 
 ## Eight component combinations
 
@@ -145,10 +145,9 @@ this runtime check. The launcher also passes the extension import path into Ray
 workers. Deploy the same code and patched VeRL installation to every participating
 node.
 
-This correction affects training state. Continuing an old checkpoint does not
-reconstruct past EMA or curriculum updates that were missed because of transient
-identifiers. Historical results require a separate check against their actual
-runtime; new runs should use the corrected identity path from initialization.
+Use persistent input identifiers from initialization so repeated inputs share
+their intended EMA and curriculum state. Resuming an actor checkpoint cannot
+reconstruct EMA or curriculum updates absent from the saved state.
 
 ## Explicit token-level policy and runtime checks
 
@@ -230,4 +229,4 @@ its shared strict parser dependency.
 
 ## Joint weight selection
 
-See [rars_joint_search.md](rars_joint_search.md) for the full joint-grid task, validation, recovery and freeze interfaces. This optional joint-grid interface and the paper's OAT sensitivity protocol have different configuration domains; neither specifies the historical formation order of Selected.
+See [rars_joint_search.md](rars_joint_search.md) for the full joint-grid task, validation, recovery and freeze interfaces. The optional joint-grid interface defines a Cartesian candidate domain; the paper's OAT sensitivity protocol varies one parameter at a time against a fixed background.

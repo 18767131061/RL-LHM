@@ -5,16 +5,16 @@ private or six public unordered pair weights. Each pair shares its weight in
 both directions; unlisted off-diagonal pairs stay at 0.4 in this tool. A formal
 tool configuration supplies 15 levels from 0.1 through 1.5 and five seeds. The
 candidate/seed coverage required by `freeze` is computed from that configuration.
-This is an optional executable search interface, not the confirmed procedure
-that generated the paper's Selected profiles.
+Use this optional interface to configure new Cartesian searches. The paper's
+Selected profiles and OAT sensitivity protocol are described below.
 
 The paper separates the final Selected profiles, OAT sensitivity, and trained
 Uniform/RARS-off controls. OAT also scans the shared other-pair weight: five
 private axes and seven public axes, 15 values per axis, with other severity
 weights at 1.0. Its 75/105 axis-counted points and 375/525 seed evaluations are
 not the joint tool's candidate count. All axes pass through the same all-1.0
-profile. The Selected values coincide with observed OAT peaks; that observation
-does not specify candidate generation or selection order.
+profile. The Selected values coincide with the observed OAT peaks. Candidate generation
+for this optional runner follows the explicit Cartesian configuration.
 
 Copy `configs/rars_grid.example.json` outside the repository and replace its
 paths. The five `seed_train_files` contain the same training patient/group
@@ -146,10 +146,8 @@ classes for both source validation and model output. Do not use a target
 four-class macro list as a five-class source's selection objective.
 
 The current formal reference runner requires the same explicit 15 levels and
-five seeds for LOCO; `loco_pairs` supplies the direction-specific axes. This
-constraint defines a new executable configuration interface, not a recovery of
-the historical direction-specific candidate domain. Historical LOCO internal
-split parameters are not bundled.
+five seeds for LOCO; `loco_pairs` supplies the direction-specific axes. Supply direction-specific candidate axes and source split parameters explicitly
+when configuring a LOCO search.
 
 ## Final fitting scope
 

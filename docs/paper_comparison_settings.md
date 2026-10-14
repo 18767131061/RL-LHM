@@ -46,8 +46,8 @@ as complete vectors, and held fixed during RL; prototypes and reward memory
 update separately. The [reference extractor](visual_feature_extraction.md)
 uses final 1024-wide visual-block states before merger/normalization, mean
 pooling per phase, a shared fixed 1024×384 projection, phase concatenation,
-and whole-vector L2 normalization. Reference identity is explicit in the cache;
-existing caches are not silently relabeled or replaced.
+and whole-vector L2 normalization. Cache metadata records the reference extractor identity; the cache contract
+checks the model and extraction settings before use.
 
 ## DICOM reading and prepared input construction (D.1)
 
@@ -84,16 +84,17 @@ they do not reconstruct upstream volume-to-input processing.
 The paper's configuration table distinguishes primary Qwen3-VL-4B-Instruct,
 LLaVA-OneVision-1.5-4B, Qwen2.5-VL-3B, InternVL3.5-4B, YOLOv8-X,
 YOLOv11-X, RT-DETR-L, and Faster R-CNN R50-FPN. Five training seeds and
-final-epoch checkpoints describe training variability. The primary SFT's
-learning rate 1e-5, 6 epochs, per-device batch 2 and accumulation 16 do not
-supply missing auxiliary-model settings. Four installed GPUs do not by
-themselves determine data parallelism or effective batch size.
+final-epoch checkpoints describe training variability. The Qwen3-VL-4B primary SFT uses learning rate 1e-5, 6 epochs, per-device
+batch 2, and accumulation 16. Configure the optimizer, schedule, device batch,
+accumulation, and data-parallel size for each auxiliary model explicitly.
+Effective batch size is device batch × accumulation × data-parallel size,
+with units of three-phase groups for VLMs and phase images for detectors.
 
 `preprocess/build_real961_detector_dataset.py` exports the private 771-patient
 development union and a separate 190-patient test set. Both YAML train and val
-point to development. This export is not each detector's actual fit scope;
-its existing preparation metadata fields describe the export, not observed
-training or checkpoint selection. `phase_mapping.csv` records the supplied
+point to that development export. Prepare distinct fitting and validation
+inputs when required by the intended training protocol. The preparation
+metadata describes the exported dataset. `phase_mapping.csv` records the supplied
 patient/position/phase relationship for downstream adapters.
 
 The VLM adapter uses group plurality, fixed-order group ties, patient plurality,
@@ -110,7 +111,7 @@ A detector integration must explicitly supply confidence definition/threshold/
 stage; NMS method, class scope, IoU and maximum boxes; group/patient aggregation
 and tie rules; and no-box/no-diagnosis handling. Completion NLL is not a detector
 score. The evaluator's prediction–GT IoU=0.50 is separate from confidence and
-NMS thresholds. Do not introduce a new detector aggregation rule to regenerate
-existing patient results. Undefined diagnoses retain the full denominator;
-absence of a box does not imply NC. The repository does not supply the missing
-historical detector readout as a default.
+NMS thresholds. Undefined diagnoses retain the full denominator;
+absence of a box does not imply NC. The repository supplies canonical matching
+and patient-metric modules; model-specific detector-to-patient readout adapters
+must be provided by the integrating application.

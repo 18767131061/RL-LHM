@@ -76,7 +76,7 @@ python evaluation/evaluate_paper_protocol.py \
   --iou-thresholds 0 0.5
 ```
 
-Threshold `0` denotes strictly positive overlap, and positive thresholds use `>=`. Missing, duplicate, or extra prediction keys are rejected instead of silently dropping inputs. Each record's `group_id` must match the manifest. Adapt the inference helper's CSV output to the documented completion-record schema when using that helper; phase-specific ground truth must come from the evaluation annotations.
+Threshold `0` denotes strictly positive overlap, and positive thresholds use `>=`. The evaluator requires exactly one prediction key for each manifest group and rejects missing, duplicate, or extra keys. Each record's `group_id` must match the manifest. Adapt the inference helper's CSV output to the documented completion-record schema when using that helper; phase-specific ground truth must come from the evaluation annotations.
 
 See `docs/metrics_pipeline.md` for the complete input/output contract. The CLI tests use synthetic inputs without images, model weights, or private data.
 
@@ -127,8 +127,9 @@ independent unordered pair weights, dispatches candidate/seed runs, scores only
 identified validation outputs, and refuses an exhaustive freeze until every
 candidate has all five seed scores. The current [training contract](docs/training_pipeline.md)
 fixes token-level PPO clipping and one global masked token denominator for both
-policy and KL losses, with version-restricted VeRL patches. The runner is not the confirmed historical selection procedure for the paper's
-Selected profiles. The [released reference extractor](docs/visual_feature_extraction.md) supplies
+policy and KL losses, with version-restricted VeRL patches. The runner defines an optional Cartesian search; the paper's Selected profiles
+and OAT sensitivity analysis are described separately in the
+[comparison settings](docs/paper_comparison_settings.md). The [released reference extractor](docs/visual_feature_extraction.md) supplies
 the SFT visual-feature cache preparation and integrity checks.
 
 ## Paper comparison and preprocessing interfaces
@@ -138,6 +139,7 @@ Selected/OAT/controls, group-count dictionary, input construction, VLM readout,
 and detector stages to their paper locations and public entry points.
 `preprocess/build_real961_detector_dataset.py` exports the private **development**
 union (654 + 117 = 771 patients) and points both YAML train/val entries to it;
-this is not an independent training/validation split or a record of each
-model's actual fitting population. Model-specific fitting and postprocessing
-settings must be supplied explicitly for any new run.
+prepare separate fitting and validation inputs for a run that requires that
+partition. Supply model-specific fitting and postprocessing settings explicitly.
+The canonical evaluator accepts structured records; detector-to-patient readout
+adapters remain application-specific.
