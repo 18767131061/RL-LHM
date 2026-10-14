@@ -115,3 +115,23 @@ NMS thresholds. Undefined diagnoses retain the full denominator;
 absence of a box does not imply NC. The repository supplies canonical matching
 and patient-metric modules; model-specific detector-to-patient readout adapters
 must be provided by the integrating application.
+
+## Classification statistics and manuscript table locations
+
+The primary within-cohort comparisons are Full RL-LHM minus SFT and Full
+RL-LHM minus vanilla GRPO, using the same test patients and training seed.
+The main private/public classification tables (`tab:unified_private` and
+`tab:unified_public`) show model means ± sample SD in Panel A and individual
+seed/comparator Δ [patient-bootstrap 95% CI] and BH q values for Accuracy,
+macro-Recall and macro-F1 in Panel B. These cover the original family of
+2 cohorts × 5 seeds × 2 comparators × 3 endpoints = 60 comparisons. BH q values
+all exceed 0.05. Macro-Precision and auxiliary comparisons remain outside this
+paired family.
+
+The appendix tables (`tab:app_paired` and `tab:app_paired_public`) supply the
+complementary raw p values and Accuracy's discordant b/c counts, without
+repeating Panel B. [Table presentation](table_presentation.md) describes the
+record identities and preservation rules. Cross-seed SD and same-seed
+patient-bootstrap CIs describe different sources of uncertainty. The LOCO
+Wilson/bootstrap intervals are model-specific intervals and do not belong to
+the paired 60-comparison family.

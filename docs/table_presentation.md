@@ -30,8 +30,10 @@ the minimum and maximum of its five existing `delta` and `q` values and all
 five seed-specific source records in `seed_details`. Delta means Full minus
 the comparator. A range is a descriptive range across seeds; it is not a
 confidence interval. The actual patient-bootstrap difference CIs remain
-identified by seed, either beside the main metrics or in one detailed table.
-No cross-seed CI, mean p/q, or new Macro-Precision test is generated.
+identified by seed. The manuscript uses these `seed_details` for the paired
+statistics panel of each main classification table; the descriptive ranges
+are not a substitute for its individual intervals. No cross-seed CI, mean p/q,
+or new Macro-Precision test is generated.
 
 Compute the BH correction upstream with `statistics/apply_r1_1_bh.py`, once
 both cohorts' required paired records are available. The display helper checks
@@ -43,6 +45,33 @@ seed metrics. `aggregation/summarize_seed_results.py` uses `ddof=1` on the
 supplied values without rounding them. Do not reconstruct unavailable precision
 from displayed table cells or replace an established summary with a different
 rounding convention.
+
+## Manuscript classification panels and complementary appendix fields
+
+The private and public main classification tables (`tab:unified_private` and
+`tab:unified_public`) each use two panels under one table number:
+
+- **Panel A:** every reported model's five-seed mean ± sample SD for Accuracy,
+  macro-Precision, macro-Recall and macro-F1.
+- **Panel B:** one row for each training seed and comparator (SFT or vanilla
+  GRPO). Accuracy, macro-Recall and macro-F1 each have Full-minus-comparator
+  `Δ [95% CI]` and BH `q` columns. All five seeds are shown; each CI is the
+  existing same-seed patient-bootstrap interval.
+
+The complementary appendix tables (`tab:app_paired` and
+`tab:app_paired_public`) retain raw test `p` values and Accuracy's McNemar
+`b/c` discordant counts, indexed by the same cohort/seed/comparator identities.
+They do not repeat the main table's Δ, CI or q cells. Accuracy uses exact
+McNemar tests; macro-Recall and macro-F1 use the reported patient-level
+permutation tests. BH correction still applies once to the full 60-comparison
+family. All reported BH q values exceed 0.05, so the higher means and paired
+effect sizes remain descriptive.
+
+`evaluation/table_presentation.py` retains every supplied `p`, `q` and CI in
+`source_rows` and `seed_details`; it does not generate the LaTeX panels,
+renumber the manuscript, or migrate appendix fields automatically. Match
+records by cohort, seed, comparator and endpoint when preparing a display.
+Macro-Precision and the auxiliary models have no invented paired statistics.
 
 ## Factorial configurations and severity control
 
@@ -59,6 +88,17 @@ factorial main-effect calculations. Full/Selected and the RARS-off anchor can
 be referenced from their factorial rows without duplicating separate controls.
 The helper performs no main-effect calculation.
 
+The manuscript's supplementary factorial detection tables
+(`tab:app_factorial_detection` and `tab:app_factorial_detection_3`) retain the
+six intermediate component configurations. The vanilla-GRPO and Full endpoint
+rows remain in the corresponding main detection tables
+(`tab:private_detection_audit` and `tab:public_detection_audit`). The appendix
+therefore supplies additional configurations without repeating those endpoints.
+Class-specific results, model-specific seed details and complete threshold
+series remain separate because their experimental identities or statistical
+levels differ. Distinct CA, GFCA and same-class-first protocols retain their
+own results; coinciding numerical cells do not make those analyses duplicates.
+
 ## Aggregation readouts
 
 Use `--kind aggregation` with one record per `cohort`, `model`, and `strategy`.
@@ -73,6 +113,13 @@ The original coverage, selective accuracy, and other source fields remain in
 `source_rows`; the evaluation and aggregation APIs remain unchanged. When any
 seed has incomplete coverage, this compact view raises an error: the display
 must then retain the relevant denominator distinction.
+
+In the manuscript, `tab:app_aggregation` displays the two alternative readouts,
+NLL-weighted voting and best-single-input selection. The default majority-plus-
+NLL classification summaries remain in `tab:unified_private` and
+`tab:unified_public`; the aggregation caption records the default reference's
+zero changed-patient count (0.0000 ± 0.0000). This removes duplicate default
+performance rows while keeping the alternatives and their variability.
 
 `tests/test_table_presentation.py` uses artificial aggregate fixtures for these
 contracts, including preservation of source values and seed identity. These

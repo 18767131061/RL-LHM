@@ -97,10 +97,16 @@ The current `evaluation/evaluate_paper_protocol.py` instead requires `--manifest
 Use `evaluation/classification.py`, `evaluation/detection.py`, and `aggregation/patient.py` directly when integrating another pipeline with explicit input contracts. `scripts/plot_rars.py` renders a supplied RARS grid; it does not contain paper data.
 
 For table presentation, [the aggregate-result view](docs/table_presentation.md)
-keeps each paired statistic beside its cohort/comparator/endpoint identity,
-separates Uniform from the eight factorial settings, and hides redundant
-aggregation columns only after checking all five seeds' full coverage. Original
-source fields and seed-specific confidence intervals remain available.
+retains each paired statistic's cohort, seed, comparator and endpoint identity.
+The manuscript's main private/public classification tables pair Panel A's
+five-seed means ± SD with Panel B's individual-seed `Δ [95% CI]` and BH `q`
+columns for Accuracy, macro-Recall and macro-F1. The complementary appendix
+retains raw `p` and McNemar discordant counts. These displays share the original
+60-comparison family; intervals are not pooled or averaged across seeds.
+The helper also separates Uniform from the eight factorial settings and hides
+redundant aggregation columns only after checking all five seeds' full coverage.
+Every original source field remains available; the helper does not generate
+manuscript layouts or recompute statistics.
 
 ## Reproducibility and limitations
 
