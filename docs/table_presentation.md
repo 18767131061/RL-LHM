@@ -94,7 +94,11 @@ patient-bootstrap/Wilson intervals, p/q values and discordant/correct-patient
 counts once, under their full identities. It adds statistical detail to the
 main mean/SD tables rather than duplicating the summary performance tables.
 Its record types are `paired_difference`, `model_performance`,
-`class_performance`, `loco_performance`, and `auxiliary_performance`.
+`class_performance`, `loco_performance`, `auxiliary_performance`, and
+`loco_class_summary`. The last type preserves the separately reported LOCO
+class Recall/F1 means with `summary_statistic: five_seed_mean` and empty seed,
+interval and inferential fields; no unreported class SD is invented. It does
+not repeat the main overall LOCO mean/SD performance table.
 Blank statistical fields mean inapplicable or unreported, never zero or
 nonsignificant. Existing values are preserved, including adverse comparisons.
 No p-value, q-value or interval endpoint is averaged, pooled or substituted
