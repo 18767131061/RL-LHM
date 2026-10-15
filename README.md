@@ -98,12 +98,13 @@ Use `evaluation/classification.py`, `evaluation/detection.py`, and `aggregation/
 
 For table presentation, [the summary export workflow](docs/table_presentation.md)
 preserves locked five-seed mean/sample-SD decimal strings in shared manuscript
-and response table fragments. The primary classification tables have one row
-per model, four performance metrics, and existing significant-seed counts for
-Accuracy, macro-Recall and macro-F1 against Full RL-LHM. The original 60-test
-BH family has no q < 0.05. Supplementary Data S1 retains seed-specific estimates,
-patient intervals, raw p/q values and discordant counts. Counts of significant
-seeds are not new tests on the means; p/q values and intervals are never averaged.
+and response table fragments. The primary classification tables group the ten
+models and show four performance metrics; compact response fragments show the
+three primary training methods. The original 60-test BH family has no q < 0.05,
+reported in a brief table note. Supplementary Data S1 retains seed-specific
+estimates, patient intervals, p/q values and discordant counts. Class tables
+show mean ± sample SD and patient counts; their distinct seed ranges remain
+available in a consolidated supplement fragment and the source JSON.
 The export script performs no evaluation or inference. The existing aggregate
 view also separates Uniform from the eight factorial settings and checks full
 coverage before hiding redundant aggregation columns.

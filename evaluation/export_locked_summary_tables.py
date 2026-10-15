@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Export locked mean/sample-SD strings and count existing per-seed BH decisions.
+"""Export grouped five-seed summaries while preserving locked decimal strings.
 
-This presentation-only tool never evaluates a model, estimates an interval,
-computes a test, reapplies BH, or averages p-values, q-values or CI endpoints.
+This presentation-only tool validates existing paired records and metric domains;
+it performs no evaluation, interval estimation, statistical test or BH correction.
 """
 from __future__ import annotations
 import argparse
@@ -13,67 +13,163 @@ from decimal import Decimal
 from pathlib import Path
 
 PAIRED_METRICS = ('accuracy', 'macro_recall', 'macro_f1')
+CLASSIFICATION_METRICS = ('accuracy', 'macro_precision', 'macro_recall', 'macro_f1')
+MODEL_GROUPS = (
+    ('Qwen3-VL-4B', ('SFT', 'vanilla GRPO', 'Full RL-LHM')),
+    ('Auxiliary VLM baselines', ('LLaVA-OneVision-1.5-4B SFT',
+                                'Qwen2.5-VL-3B SFT', 'InternVL3.5-4B SFT')),
+    ('Task-specific detectors', ('YOLOv8-X', 'YOLOv11-X', 'RT-DETR-L',
+                                 'Faster R-CNN (R50-FPN)')),
+)
+DECIMAL_PATTERN = r'-?\d+\.\d+'
+GENERATED = '% Generated from locked summary strings; do not hand-edit.'
 
 
-def paired_counts(records, cohort, comparator, seeds):
-    """Count q < .05 within each endpoint, preserving all five seed identities."""
-    expected = {str(seed) for seed in seeds}
-    counts = []
-    for metric in PAIRED_METRICS:
-        selected = [row for row in records if row['record_type'] == 'paired_difference'
-                    and row['model'] == 'Full RL-LHM'
-                    and row['cohort'] == cohort and row['comparator'] == comparator
-                    and row['metric'] == metric]
-        observed = [row['seed'] for row in selected]
-        if len(observed) != len(expected) or set(observed) != expected:
-            raise ValueError(f'Incomplete or duplicate paired seeds: {cohort}/{comparator}/{metric}')
-        qs = [Decimal(row['bh_q']) for row in selected]
-        if any(not q.is_finite() or not 0 <= q <= 1 for q in qs):
-            raise ValueError('BH q must be finite and in [0,1]')
-        counts.append(f'{sum(q < Decimal("0.05") for q in qs)}/{len(expected)}')
-    return ', '.join(counts)
+def decimal_string(value):
+    if not isinstance(value, str) or not re.fullmatch(DECIMAL_PATTERN, value):
+        raise ValueError('Locked summaries must use finite decimal strings')
+    return Decimal(value)
+
+
+def validate_metric(metric, *, domain='performance'):
+    """Validate domains without repairing signs or recomputing any value.
+
+    Explicit signed_difference permits negative differences of proportions.
+    Every source table in this exporter contains performance metrics in [0,1].
+    """
+    if domain not in ('performance', 'signed_difference'):
+        raise ValueError(f'Unknown metric domain: {domain}')
+    lower = Decimal('0') if domain == 'performance' else Decimal('-1')
+    mean, sd = decimal_string(metric['mean']), decimal_string(metric['sd'])
+    if not lower <= mean <= 1:
+        raise ValueError(f'{domain} mean outside [{lower},1]')
+    if sd < 0:
+        raise ValueError('Sample SD cannot be negative')
+    if 'seed_range' in metric:
+        bounds = metric['seed_range']
+        if not isinstance(bounds, (list, tuple)) or len(bounds) != 2:
+            raise ValueError('A seed range requires exactly two bounds')
+        low, high = map(decimal_string, bounds)
+        if not lower <= low <= high <= 1:
+            raise ValueError(f'{domain} seed range outside [{lower},1] or reversed')
+        if not low <= mean <= high:
+            raise ValueError('Mean must fall within its seed range')
+
+
+def parse_locked_tex_summary(cell, *, domain='performance'):
+    """Import an explicit TeX min--max separator without treating it as a sign.
+
+    Read the bracketed range separately from mean/SD. A signed endpoint is
+    accepted only in the explicit signed_difference domain; no absolute value
+    or inferred sign correction is applied. Decimal strings are retained.
+    """
+    range_match = re.search(
+        rf'\[\s*({DECIMAL_PATTERN})\s*--\s*({DECIMAL_PATTERN})\s*\]', cell)
+    if ('[' in cell or ']' in cell) and not range_match:
+        raise ValueError('Malformed TeX seed range')
+    core = cell[:range_match.start()] if range_match else cell
+    nums = re.findall(DECIMAL_PATTERN, core)
+    if len(nums) != 2:
+        raise ValueError('Expected one locked mean and sample SD')
+    metric = dict(mean=nums[0], sd=nums[1], best=r'\best{' in cell)
+    if range_match:
+        metric['seed_range'] = list(range_match.groups())
+    validate_metric(metric, domain=domain)
+    return metric
+
+
+def validate_paired_family(records, seeds):
+    """Check the 60 existing cohort/seed/comparator/endpoint identities and q's."""
+    expected = {(cohort, comparator, metric, str(seed))
+                for cohort in ('private', 'public')
+                for comparator in ('SFT', 'vanilla GRPO')
+                for metric in PAIRED_METRICS for seed in seeds}
+    selected = [r for r in records if r['record_type'] == 'paired_difference']
+    observed = [(r['cohort'], r['comparator'], r['metric'], r['seed']) for r in selected]
+    if len(observed) != len(expected) or set(observed) != expected:
+        raise ValueError('Incomplete, duplicate or unexpected paired-family identity')
+    if any(r['model'] != 'Full RL-LHM' for r in selected):
+        raise ValueError('Paired comparison candidate must be Full RL-LHM')
+    qs = [Decimal(r['bh_q']) for r in selected]
+    if any(not q.is_finite() or not 0 <= q <= 1 for q in qs):
+        raise ValueError('BH q must be finite and in [0,1]')
+    return {'tests': len(qs), 'below_threshold': sum(q < Decimal('0.05') for q in qs)}
 
 
 def tex_escape(value):
-    return ''.join({'&':r'\&', '%':r'\%', '_':r'\_', '#':r'\#',
-                    '$':r'\$', '{':r'\{', '}':r'\}'}.get(c,c) for c in str(value))
+    return ''.join({'&': r'\&', '%': r'\%', '_': r'\_', '#': r'\#',
+                    '$': r'\$', '{': r'\{', '}': r'\}'}.get(c, c) for c in str(value))
 
 
-def metric_cell(metric, include_range=False):
-    # Preserve decimal strings exactly; formatting cannot replace a locked value.
+def model_cell(model):
+    return r'\textbf{RL-LHM (ours)}' if model == 'Full RL-LHM' else tex_escape(model)
+
+
+def range_cell(metric, *, domain='performance'):
+    validate_metric(metric, domain=domain)
+    low, high = metric['seed_range']
+    # Explicit math separator cannot fuse with a signed endpoint into ---.
+    return '$[' + low + r'\,\text{--}\,' + high + ']$'
+
+
+def metric_cell(metric, include_range=False, *, domain='performance'):
+    validate_metric(metric, domain=domain)
     mean, sd = metric['mean'], metric['sd']
-    for value in (mean, sd):
-        if not isinstance(value, str) or not re.fullmatch(r'-?\d+\.\d+', value):
-            raise ValueError('Locked summaries must use decimal strings')
-    if Decimal(sd) < 0:
-        raise ValueError('Sample SD cannot be negative')
     mean_tex = r'\textbf{' + mean + '}' if metric.get('best', False) else mean
     cell = mean_tex + r'$\,\pm\,$' + sd
     if include_range and 'seed_range' in metric:
-        low, high = metric['seed_range']
-        cell = r'\shortstack{' + cell + r'\\{[' + low + '--' + high + ']}}'
+        cell = r'\shortstack{' + cell + r'\\' + range_cell(metric, domain=domain) + '}'
     return cell
+
+
+def classification_rows(table, *, primary_only=False):
+    if tuple(table['metrics']) != CLASSIFICATION_METRICS:
+        raise ValueError('Classification requires its four reported metrics in order')
+    rows = {row['model']: row for row in table['rows']}
+    expected = {model for _, models in MODEL_GROUPS for model in models}
+    if len(rows) != len(table['rows']) or set(rows) != expected:
+        raise ValueError('Classification requires all ten distinct named models')
+    rendered = [GENERATED]
+    groups = MODEL_GROUPS[:1] if primary_only else MODEL_GROUPS
+    for i, (group, models) in enumerate(groups):
+        if i:
+            rendered.append(r'\addlinespace[3pt]')
+        rendered.append(r'\multicolumn{5}{@{}l}{\textit{' + group + r'}} \\')
+        for model in models:
+            cells = [model_cell(model)]
+            cells.extend(metric_cell(rows[model]['metrics'][m]) for m in table['metrics'])
+            rendered.append(' & '.join(cells) + r' \\')
+    return '\n'.join(rendered) + '\n'
 
 
 def render_tables(source, records):
     seeds = source['training_seeds']
     if len(seeds) != 5 or len(set(seeds)) != 5:
         raise ValueError('Expected five distinct training seeds')
+    if any(name.startswith('classification_') for name in source['tables']):
+        validate_paired_family(records, seeds)
     outputs = {}
+    range_rows = [GENERATED]
     for name, table in source['tables'].items():
-        rendered = ['% Generated from locked summary strings; do not hand-edit.']
+        if name.startswith('classification_'):
+            outputs[name + '.tex'] = classification_rows(table)
+            outputs[name + '_response.tex'] = classification_rows(table, primary_only=True)
+            continue
+        rendered = [GENERATED]
         for row in table['rows']:
-            cells = [tex_escape(row['model'])]
+            cells = [model_cell(row['model'])]
             if name.startswith('perclass_'):
                 cells.extend([tex_escape(row['class']), str(row['test_patients'])])
-            cells.extend(metric_cell(row['metrics'][m], name.startswith('perclass_'))
-                         for m in table['metrics'])
-            if name.startswith('classification_'):
-                cohort = name.removeprefix('classification_')
-                cells.append(paired_counts(records,cohort,row['model'],seeds)
-                             if row['model'] in ('SFT','vanilla GRPO') else '---')
+                cohort = name.removeprefix('perclass_').title()
+                ranges = [cohort, model_cell(row['model']), tex_escape(row['class']),
+                          str(row['test_patients'])]
+                ranges.extend(range_cell(row['metrics'][m]) for m in table['metrics'])
+                range_rows.append(' & '.join(ranges) + r' \\')
+            cells.extend(metric_cell(row['metrics'][m]) for m in table['metrics'])
             rendered.append(' & '.join(cells) + r' \\')
         outputs[name + '.tex'] = '\n'.join(rendered) + '\n'
+    if len(range_rows) > 1:
+        outputs['perclass_seed_ranges.tex'] = '\n'.join(range_rows) + '\n'
     return outputs
 
 
@@ -96,7 +192,9 @@ def main():
         args.output_dir.mkdir(parents=True, exist_ok=True)
         for name, content in outputs.items():
             (args.output_dir / name).write_text(content, encoding='utf-8')
-    print(f'{len(outputs)} locked summary table fragments verified' if args.check else f'{len(outputs)} table fragments exported')
+    print(f'{len(outputs)} locked summary table fragments verified' if args.check
+          else f'{len(outputs)} table fragments exported')
+
 
 if __name__ == '__main__':
     main()

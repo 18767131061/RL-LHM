@@ -71,15 +71,38 @@ retain their original precision. The exporter does not reconstruct a primary
 summary from rounded seed-level table cells. Sample SD describes five training
 seeds and uses denominator n−1; it is distinct from a patient interval.
 
-Primary `classification_private`/`classification_public` tables render one
-row per model: Accuracy, macro-Precision, macro-Recall, macro-F1, and significant-
-seed counts. For SFT and vanilla GRPO, the CSV `paired_difference` records must
-contain exactly the five unique seed IDs for each tested endpoint against
-`model: Full RL-LHM`. The exporter counts their existing `bh_q < 0.05`, in
-Accuracy/Recall/F1 order. The current study has `0/5, 0/5, 0/5` in each comparator
-row. Other models and the Full reference use a dash. Macro-Precision is never
-included in these counts. Neither these counts nor `best` formatting denote
-a test on the means; nonsignificance does not establish equivalence.
+Primary `classification_private`/`classification_public` tables have five
+columns: Model/training, Accuracy, macro-Precision, macro-Recall and macro-F1.
+Their groups are Qwen3-VL-4B (SFT, vanilla GRPO and RL-LHM), Auxiliary VLM
+baselines (three models), and Task-specific detectors (four models). Missing,
+extra or duplicated models raise an error rather than silently dropping a row.
+The corresponding `_response` fragments retain the same four endpoints for the
+three primary training methods. They contain no significant-seed column.
+
+The CSV `paired_difference` records must contain all 60 unique
+cohort/comparator/endpoint/seed identities against `model: Full RL-LHM`.
+`validate_paired_family()` validates those identities and existing q values;
+it does not change them. A brief primary-table note reports that the existing
+comparisons against SFT and vanilla GRPO did not reach BH q < 0.05. The tested
+endpoints are Accuracy, macro-Recall and macro-F1. Macro-Precision and auxiliary
+models are outside that family. Bold formatting identifies the highest reported
+mean, not statistical significance.
+
+All performance means and seed-range endpoints are validated in [0,1], and a
+range must be ordered and contain its mean. These checks also inspect ranges
+omitted from the main display. `metric_cell(..., domain="signed_difference")`
+explicitly permits negative differences of proportions and preserves their
+signs. It never applies an absolute value. `parse_locked_tex_summary()` parses
+an explicit bracketed `--` separator separately from endpoint signs; a generic
+numeric regex over the entire cell would incorrectly interpret `[0.8--1.0]`
+as an upper bound of −1.0. The range renderer separates the TeX dash command
+from endpoint text, including when a legitimate endpoint is negative.
+
+Per-class fragments display mean ± sample SD and test-patient counts.
+`perclass_seed_ranges.tex` consolidates both cohorts' class-specific minimum
+and maximum values in seven columns: Cohort, Model, Class, test patients, and
+Precision/Recall/F1 ranges. The locked JSON retains these ranges, and the
+consolidated fragment adds range information without repeating the means/SDs.
 
 Per-class and rare-class fragments share the canonical class means/SDs.
 The patient counts 19 (private ICC), 9 (private FNH) and 20 (public ICC) identify
@@ -105,9 +128,13 @@ No p-value, q-value or interval endpoint is averaged, pooled or substituted
 for a mean-level inference.
 
 `tests/test_export_locked_summary_tables.py` uses artificial inputs to verify
-seed grouping, preservation of decimal precision, the q < 0.05 boundary,
-missing/duplicate seed rejection, and the separation of untested models.
-These CPU tests validate the export interface, not the paper's experiments.
+exact decimal preservation, legal 0/1 boundaries, negative-difference sign
+preservation, malformed and reversed range rejection, the q < 0.05 boundary,
+paired identity completeness, model ordering, five-column output, and separate
+retention of class ranges. Its TeX integration test compiles grouped rows and
+signed ranges with `pdflatex` when the engine is available and checks for
+alignment errors and horizontal overflow. These CPU tests validate the export
+interface, not the paper's experiments.
 
 ## Factorial configurations and severity control
 
