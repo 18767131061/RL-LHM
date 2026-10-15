@@ -121,17 +121,21 @@ must be provided by the integrating application.
 The primary within-cohort comparisons are Full RL-LHM minus SFT and Full
 RL-LHM minus vanilla GRPO, using the same test patients and training seed.
 The main private/public classification tables (`tab:unified_private` and
-`tab:unified_public`) show model means ± sample SD in Panel A and individual
-seed/comparator Δ [patient-bootstrap 95% CI] and BH q values for Accuracy,
-macro-Recall and macro-F1 in Panel B. These cover the original family of
-2 cohorts × 5 seeds × 2 comparators × 3 endpoints = 60 comparisons. BH q values
-all exceed 0.05. Macro-Precision and auxiliary comparisons remain outside this
-paired family.
+`tab:unified_public`) show one row per model with five-seed mean ± sample SD.
+A compact column counts significant seeds against Full RL-LHM for Accuracy,
+macro-Recall and macro-F1: 0/5 for each endpoint in both comparator rows.
+These decisions use the original family of 2 cohorts × 5 seeds × 2 comparators
+× 3 endpoints = 60 comparisons, whose BH q values all exceed 0.05.
+Macro-Precision and auxiliary comparisons remain outside this paired family;
+their untested fields must not be marked nonsignificant.
 
-The appendix tables (`tab:app_paired` and `tab:app_paired_public`) supply the
-complementary raw p values and Accuracy's discordant b/c counts, without
-repeating Panel B. [Table presentation](table_presentation.md) describes the
-record identities and preservation rules. Cross-seed SD and same-seed
-patient-bootstrap CIs describe different sources of uncertainty. The LOCO
-Wilson/bootstrap intervals are model-specific intervals and do not belong to
-the paired 60-comparison family.
+Supplementary Data S1 contains the original seed-specific Δ, patient-bootstrap
+95% CI, raw p, BH q and Accuracy discordant b/c counts under their full record
+identities. It also holds model-specific within-cohort, rare-class and LOCO
+intervals and auxiliary seed metrics. [Table presentation](table_presentation.md)
+describes the controlled export and preservation rules. Cross-seed sample SD
+and same-seed patient-bootstrap CIs describe different sources of uncertainty;
+neither p/q values nor interval endpoints are averaged across seeds. Significant-
+seed counts do not define a new test on the mean or establish equivalence.
+The LOCO Wilson/bootstrap intervals remain model-specific and are outside the
+paired 60-comparison family.

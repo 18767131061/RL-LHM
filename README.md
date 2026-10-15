@@ -96,17 +96,17 @@ The current `evaluation/evaluate_paper_protocol.py` instead requires `--manifest
 
 Use `evaluation/classification.py`, `evaluation/detection.py`, and `aggregation/patient.py` directly when integrating another pipeline with explicit input contracts. `scripts/plot_rars.py` renders a supplied RARS grid; it does not contain paper data.
 
-For table presentation, [the aggregate-result view](docs/table_presentation.md)
-retains each paired statistic's cohort, seed, comparator and endpoint identity.
-The manuscript's main private/public classification tables pair Panel A's
-five-seed means ± SD with Panel B's individual-seed `Δ [95% CI]` and BH `q`
-columns for Accuracy, macro-Recall and macro-F1. The complementary appendix
-retains raw `p` and McNemar discordant counts. These displays share the original
-60-comparison family; intervals are not pooled or averaged across seeds.
-The helper also separates Uniform from the eight factorial settings and hides
-redundant aggregation columns only after checking all five seeds' full coverage.
-Every original source field remains available; the helper does not generate
-manuscript layouts or recompute statistics.
+For table presentation, [the summary export workflow](docs/table_presentation.md)
+preserves locked five-seed mean/sample-SD decimal strings in shared manuscript
+and response table fragments. The primary classification tables have one row
+per model, four performance metrics, and existing significant-seed counts for
+Accuracy, macro-Recall and macro-F1 against Full RL-LHM. The original 60-test
+BH family has no q < 0.05. Supplementary Data S1 retains seed-specific estimates,
+patient intervals, raw p/q values and discordant counts. Counts of significant
+seeds are not new tests on the means; p/q values and intervals are never averaged.
+The export script performs no evaluation or inference. The existing aggregate
+view also separates Uniform from the eight factorial settings and checks full
+coverage before hiding redundant aggregation columns.
 
 ## Reproducibility and limitations
 

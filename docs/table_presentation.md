@@ -30,15 +30,15 @@ the minimum and maximum of its five existing `delta` and `q` values and all
 five seed-specific source records in `seed_details`. Delta means Full minus
 the comparator. A range is a descriptive range across seeds; it is not a
 confidence interval. The actual patient-bootstrap difference CIs remain
-identified by seed. The manuscript uses these `seed_details` for the paired
-statistics panel of each main classification table; the descriptive ranges
-are not a substitute for its individual intervals. No cross-seed CI, mean p/q,
-or new Macro-Precision test is generated.
+identified by seed. These `seed_details` are an interchange view for preserving
+existing statistics; the manuscript presents compact five-seed summaries and
+provides the individual records in Supplementary Data S1. No cross-seed CI,
+mean p/q, or new Macro-Precision test is generated.
 
-Compute the BH correction upstream with `statistics/apply_r1_1_bh.py`, once
-both cohorts' required paired records are available. The display helper checks
-the 60 identities but cannot authenticate the supplied q-values or replace that
-upstream calculation. Preserve each result's existing precision and aggregation
+The q-values originate from the existing 60-comparison BH correction. A
+presentation change must consume those values without rerunning tests or BH.
+The display helper checks the 60 identities but cannot authenticate supplied
+q-values or reconstruct their patient-level evidence. Preserve each result's existing precision and aggregation
 convention: the main summaries use full-precision seed results, while some
 intermediate or auxiliary results explicitly summarize retained four-decimal
 seed metrics. `aggregation/summarize_seed_results.py` uses `ddof=1` on the
@@ -46,32 +46,64 @@ supplied values without rounding them. Do not reconstruct unavailable precision
 from displayed table cells or replace an established summary with a different
 rounding convention.
 
-## Manuscript classification panels and complementary appendix fields
+## Locked five-seed summaries and Supplementary Data S1
 
-The private and public main classification tables (`tab:unified_private` and
-`tab:unified_public`) each use two panels under one table number:
+`evaluation/export_locked_summary_tables.py` exports shared LaTeX body rows
+from locked summaries and the existing statistical-detail CSV:
 
-- **Panel A:** every reported model's five-seed mean ± sample SD for Accuracy,
-  macro-Precision, macro-Recall and macro-F1.
-- **Panel B:** one row for each training seed and comparator (SFT or vanilla
-  GRPO). Accuracy, macro-Recall and macro-F1 each have Full-minus-comparator
-  `Δ [95% CI]` and BH `q` columns. All five seeds are shown; each CI is the
-  existing same-seed patient-bootstrap interval.
+```bash
+python evaluation/export_locked_summary_tables.py \
+  --summary /path/to/results_summary.json \
+  --supplement /path/to/Supplementary_statistical_data.csv \
+  --output-dir ./outputs/tables
+```
 
-The complementary appendix tables (`tab:app_paired` and
-`tab:app_paired_public`) retain raw test `p` values and Accuracy's McNemar
-`b/c` discordant counts, indexed by the same cohort/seed/comparator identities.
-They do not repeat the main table's Δ, CI or q cells. Accuracy uses exact
-McNemar tests; macro-Recall and macro-F1 use the reported patient-level
-permutation tests. BH correction still applies once to the full 60-comparison
-family. All reported BH q values exceed 0.05, so the higher means and paired
-effect sizes remain descriptive.
+Use `--check` to compare generated fragments without writing. Inputs are
+supplied separately; manuscript sources and real study data are not bundled
+in this repository. This script does not invoke the evaluator, train models,
+bootstrap, permute labels, or apply BH.
 
-`evaluation/table_presentation.py` retains every supplied `p`, `q` and CI in
-`source_rows` and `seed_details`; it does not generate the LaTeX panels,
-renumber the manuscript, or migrate appendix fields automatically. Match
-records by cohort, seed, comparator and endpoint when preparing a display.
-Macro-Precision and the auxiliary models have no invented paired statistics.
+The summary JSON has `training_seeds` and `tables`. Each table specifies its
+ordered `metrics` and `rows`; each row has a `model` and metric mappings
+containing decimal-string `mean`, `sd`, and optional `best`/`seed_range` fields.
+Class tables additionally retain `class` and `test_patients`. Locked strings
+retain their original precision. The exporter does not reconstruct a primary
+summary from rounded seed-level table cells. Sample SD describes five training
+seeds and uses denominator n−1; it is distinct from a patient interval.
+
+Primary `classification_private`/`classification_public` tables render one
+row per model: Accuracy, macro-Precision, macro-Recall, macro-F1, and significant-
+seed counts. For SFT and vanilla GRPO, the CSV `paired_difference` records must
+contain exactly the five unique seed IDs for each tested endpoint against
+`model: Full RL-LHM`. The exporter counts their existing `bh_q < 0.05`, in
+Accuracy/Recall/F1 order. The current study has `0/5, 0/5, 0/5` in each comparator
+row. Other models and the Full reference use a dash. Macro-Precision is never
+included in these counts. Neither these counts nor `best` formatting denote
+a test on the means; nonsignificance does not establish equivalence.
+
+Per-class and rare-class fragments share the canonical class means/SDs.
+The patient counts 19 (private ICC), 9 (private FNH) and 20 (public ICC) identify
+class-specific test patients. LOCO direction tables retain three model rows
+and their existing Accuracy, macro-Recall and macro-F1 summaries. They do not
+borrow the primary paired tests or fabricate an unreported Macro-Precision.
+Different cohorts, classes, thresholds, configurations and directions remain
+separate scientific groups.
+
+The formal Supplementary Data S1 CSV holds original seed-level estimates,
+patient-bootstrap/Wilson intervals, p/q values and discordant/correct-patient
+counts once, under their full identities. It adds statistical detail to the
+main mean/SD tables rather than duplicating the summary performance tables.
+Its record types are `paired_difference`, `model_performance`,
+`class_performance`, `loco_performance`, and `auxiliary_performance`.
+Blank statistical fields mean inapplicable or unreported, never zero or
+nonsignificant. Existing values are preserved, including adverse comparisons.
+No p-value, q-value or interval endpoint is averaged, pooled or substituted
+for a mean-level inference.
+
+`tests/test_export_locked_summary_tables.py` uses artificial inputs to verify
+seed grouping, preservation of decimal precision, the q < 0.05 boundary,
+missing/duplicate seed rejection, and the separation of untested models.
+These CPU tests validate the export interface, not the paper's experiments.
 
 ## Factorial configurations and severity control
 
