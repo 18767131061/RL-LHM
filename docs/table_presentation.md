@@ -82,8 +82,10 @@ three primary training methods. They contain no significant-seed column.
 The CSV `paired_difference` records must contain all 60 unique
 cohort/comparator/endpoint/seed identities against `model: Full RL-LHM`.
 `validate_paired_family()` validates those identities and existing q values;
-it does not change them. A brief primary-table note reports that the existing
-comparisons against SFT and vanilla GRPO did not reach BH q < 0.05. The tested
+it does not change them. The exporter creates shared English and Chinese primary-table notes that report
+the existing BH conclusion and the minimum–maximum of the five macro-F1 q
+values for each cohort and comparator. It rejects a note if the exact 60 keys
+are incomplete or any relevant q does not satisfy its stated q > 0.05 condition. The tested
 endpoints are Accuracy, macro-Recall and macro-F1. Macro-Precision and auxiliary
 models are outside that family. Bold formatting identifies the highest reported
 mean, not statistical significance.
@@ -102,7 +104,9 @@ Per-class fragments display mean ± sample SD and test-patient counts.
 `perclass_seed_ranges.tex` consolidates both cohorts' class-specific minimum
 and maximum values in seven columns: Cohort, Model, Class, test patients, and
 Precision/Recall/F1 ranges. The locked JSON retains these ranges, and the
-consolidated fragment adds range information without repeating the means/SDs.
+fragment is retained as a source view and is not included in the revised manuscript.
+The main class mean/SD tables and patient-bootstrap interval figure provide the
+compact presentation; the two types of uncertainty have different estimands.
 
 Per-class and rare-class fragments share the canonical class means/SDs.
 The patient counts 19 (private ICC), 9 (private FNH) and 20 (public ICC) identify
@@ -188,3 +192,19 @@ performance rows while keeping the alternatives and their variability.
 contracts, including preservation of source values and seed identity. These
 software tests do not constitute new patient results or reproduction of the
 paper's experiments.
+
+## Patient-bootstrap interval figure
+
+`evaluation/plot_patient_uncertainty.py` reads supplied Supplementary Data S1
+records and plots existing estimates and intervals without resampling or
+performing inference. Panels A–B select all 20 same-seed paired macro-F1
+differences (two cohorts, two comparators, five seeds). Panels C–E select all
+45 small-class Recall estimates (three classes, three models, five seeds).
+The axes distinguish paired differences from Recall proportions. A single
+seed legend uses both colors and marker shapes; the difference panels retain
+negative bounds and show a zero reference line.
+
+See `docs/patient_uncertainty.md` for usage and validation. The repository
+contains code and synthetic tests only, not S1, manuscript files, or real-data
+mapping outputs. Supply S1 separately as the sole independent statistical
+detail attachment for manuscript resubmission.

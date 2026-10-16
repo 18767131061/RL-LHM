@@ -101,6 +101,34 @@ def tex_escape(value):
                     '$': r'\$', '{': r'\{', '}': r'\}'}.get(c, c) for c in str(value))
 
 
+def classification_note(records, seeds, cohort, *, language='en'):
+    """Describe the existing tests; ranges are five q values, not new tests."""
+    validate_paired_family(records, seeds)
+    cohort_rows = [r for r in records if r['record_type'] == 'paired_difference'
+                   and r['cohort'] == cohort]
+    if len(cohort_rows) != 30 or any(Decimal(r['bh_q']) <= Decimal('0.05')
+                                    for r in cohort_rows):
+        raise ValueError('The fixed q>0.05 note does not describe these records')
+    ranges = []
+    for comparator in ('SFT', 'vanilla GRPO'):
+        rows = [r for r in cohort_rows if r['comparator'] == comparator
+                and r['metric'] == 'macro_f1']
+        if len(rows) != 5 or {r['seed'] for r in rows} != {str(s) for s in seeds}:
+            raise ValueError('Macro-F1 note requires exactly the five specified seeds')
+        qs = [Decimal(r['bh_q']) for r in rows]
+        ranges.append(f'{min(qs):.4f}--{max(qs):.4f}')
+    if language == 'en':
+        return ('BH-adjusted paired comparisons of RL-LHM with SFT and vanilla GRPO gave '
+                '$q>0.05$ for Accuracy, macro-Recall and macro-F1 across the five seeds. '
+                f'For macro-F1, $q$ ranged from {ranges[0]} versus SFT and '
+                f'{ranges[1]} versus vanilla GRPO.\n')
+    if language == 'zh':
+        return ('五个seed中，RL-LHM与SFT及vanilla GRPO的Accuracy、macro-Recall和macro-F1配对比较'
+                '经BH校正后均为$q>0.05$。macro-F1的$q$值范围分别为'
+                f'{ranges[0]}（对SFT）和{ranges[1]}（对vanilla GRPO）。\n')
+    raise ValueError('Unsupported note language')
+
+
 def model_cell(model):
     return r'\textbf{RL-LHM (ours)}' if model == 'Full RL-LHM' else tex_escape(model)
 
@@ -154,6 +182,9 @@ def render_tables(source, records):
         if name.startswith('classification_'):
             outputs[name + '.tex'] = classification_rows(table)
             outputs[name + '_response.tex'] = classification_rows(table, primary_only=True)
+            cohort = name.removeprefix('classification_')
+            outputs[name + '_note.tex'] = classification_note(records, seeds, cohort)
+            outputs[name + '_note_zh.tex'] = classification_note(records, seeds, cohort, language='zh')
             continue
         rendered = [GENERATED]
         for row in table['rows']:

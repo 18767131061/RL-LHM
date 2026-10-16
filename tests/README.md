@@ -13,3 +13,9 @@ model weights, GPU job, or running Ray service.
 cache conflicts and recovery. Its real small vision-model forward requires
 `transformers==4.57.1` and safetensors; otherwise that one case is explicitly
 skipped. All other feature contract tests use Torch with synthetic inputs.
+
+`test_plot_patient_uncertainty.py` uses synthetic interval records to test exact
+20/45 selection, identity completeness, unchanged numeric strings, interval
+validation, axis coverage, rendering, and text overlap. It requires Matplotlib.
+`test_export_locked_summary_tables.py` also tests cohort/comparator/metric-specific
+q-range notes and rejection of a false nonsignificance statement.

@@ -101,10 +101,12 @@ preserves locked five-seed mean/sample-SD decimal strings in shared manuscript
 and response table fragments. The primary classification tables group the ten
 models and show four performance metrics; compact response fragments show the
 three primary training methods. The original 60-test BH family has no q < 0.05,
-reported in a brief table note. Supplementary Data S1 retains seed-specific
+reported in a brief table note with the existing five-seed macro-F1 q ranges. Supplementary Data S1 retains seed-specific
 estimates, patient intervals, p/q values and discordant counts. Class tables
 show mean ± sample SD and patient counts; their distinct seed ranges remain
-available in a consolidated supplement fragment and the source JSON.
+in the source JSON, while the manuscript omits the derived min–max longtable.
+The [patient-uncertainty figure](docs/patient_uncertainty.md) displays the
+existing 20 paired macro-F1 and 45 small-class Recall intervals directly.
 The export script performs no evaluation or inference. The existing aggregate
 view also separates Uniform from the eight factorial settings and checks full
 coverage before hiding redundant aggregation columns.

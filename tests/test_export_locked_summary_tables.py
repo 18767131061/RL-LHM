@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from evaluation.export_locked_summary_tables import (
     CLASSIFICATION_METRICS, MODEL_GROUPS, metric_cell, parse_locked_tex_summary,
-    range_cell, render_tables, validate_paired_family,
+    range_cell, render_tables, validate_paired_family, classification_note,
 )
 
 SEEDS = [42, 2026, 3407, 1234, 5678]
@@ -115,6 +115,37 @@ class LockedTableTests(unittest.TestCase):
             self.assertNotIn(absent, full)
         self.assertEqual(source, before)
         self.assertEqual(records, records_before)
+
+    def test_note_uses_only_correct_cohort_comparator_and_metric(self):
+        records = fixtures()
+        for row in records:
+            if row['cohort'] == 'private' and row['comparator'] == 'SFT' and row['metric'] == 'macro_f1':
+                row['bh_q'] = {42: '0.1000', 2026: '0.2000', 3407: '0.3000', 1234: '0.4000', 5678: '0.5000'}[int(row['seed'])]
+            elif row['cohort'] == 'public':
+                row['bh_q'] = '0.9000'
+        before = copy.deepcopy(records)
+        note = classification_note(records, SEEDS, 'private')
+        self.assertIn('0.1000--0.5000 versus SFT', note)
+        self.assertIn('0.2000--0.2000 versus vanilla GRPO', note)
+        self.assertNotIn('0.9000', note)
+        self.assertEqual(records, before)
+        zh = classification_note(records, SEEDS, 'private', language='zh')
+        self.assertIn('0.1000--0.5000', zh)
+        for forbidden in ('0/5', 'n.s.', 'Significant seeds'):
+            self.assertNotIn(forbidden, note)
+
+    def test_note_refuses_threshold_or_identity_mismatch(self):
+        for q in ('0.0499', '0.0500'):
+            records = fixtures()
+            records[0]['bh_q'] = q
+            with self.assertRaises(ValueError):
+                classification_note(records, SEEDS, 'private')
+        records = fixtures()
+        records[0]['seed'] = records[1]['seed']
+        with self.assertRaises(ValueError):
+            classification_note(records, SEEDS, 'private')
+        with self.assertRaises(ValueError):
+            classification_note(fixtures(), SEEDS, 'unknown')
 
     def test_missing_extra_or_duplicate_model_not_silently_dropped(self):
         for change in ('missing', 'extra', 'duplicate'):
