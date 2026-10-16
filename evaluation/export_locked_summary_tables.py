@@ -177,7 +177,6 @@ def render_tables(source, records):
     if any(name.startswith('classification_') for name in source['tables']):
         validate_paired_family(records, seeds)
     outputs = {}
-    range_rows = [GENERATED]
     for name, table in source['tables'].items():
         if name.startswith('classification_'):
             outputs[name + '.tex'] = classification_rows(table)
@@ -191,16 +190,9 @@ def render_tables(source, records):
             cells = [model_cell(row['model'])]
             if name.startswith('perclass_'):
                 cells.extend([tex_escape(row['class']), str(row['test_patients'])])
-                cohort = name.removeprefix('perclass_').title()
-                ranges = [cohort, model_cell(row['model']), tex_escape(row['class']),
-                          str(row['test_patients'])]
-                ranges.extend(range_cell(row['metrics'][m]) for m in table['metrics'])
-                range_rows.append(' & '.join(ranges) + r' \\')
             cells.extend(metric_cell(row['metrics'][m]) for m in table['metrics'])
             rendered.append(' & '.join(cells) + r' \\')
         outputs[name + '.tex'] = '\n'.join(rendered) + '\n'
-    if len(range_rows) > 1:
-        outputs['perclass_seed_ranges.tex'] = '\n'.join(range_rows) + '\n'
     return outputs
 
 

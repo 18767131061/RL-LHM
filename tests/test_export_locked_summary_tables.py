@@ -159,12 +159,13 @@ class LockedTableTests(unittest.TestCase):
 
     def test_class_mean_sd_and_counts_with_ranges_preserved_separately(self):
         source = source_fixture()
+        before = copy.deepcopy(source)
         outputs = render_tables(source, fixtures())
         main = outputs['perclass_private.tex']
-        supplement = outputs['perclass_seed_ranges.tex']
         self.assertIn('HCC & 91 & 0.9106', main)
         self.assertNotIn('0.8137', main)
-        self.assertIn(r'$[0.8137\,\text{--}\,1.0000]$', supplement)
+        self.assertNotIn('perclass_seed_ranges.tex', outputs)
+        self.assertEqual(source, before)  # Locked ranges remain in the source JSON.
         source['tables']['perclass_private']['rows'][0]['metrics']['f1']['seed_range'][1] = '-1.0000'
         with self.assertRaises(ValueError):
             render_tables(source, fixtures())  # Invalid hidden ranges cannot pass.
