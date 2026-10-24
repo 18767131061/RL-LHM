@@ -57,3 +57,11 @@ completion and prediction receipts. It does not demonstrate exhaustive historica
 search or paper performance. `tests/test_visual_feature_cache.py` additionally checks the released feature
 recipe, cache reuse/recovery, and a real local synthetic Hugging Face vision
 forward without downloading a model.
+
+## Current prepared-input workflow
+
+Use [SFT preparation](sft_workflow.md), the [inference/evaluation bridge](inference_protocol_bridge.md),
+[split-preserving detector export](detector_export.md), [RARS OAT](rars_oat.md), and
+[joint five-seed statistics](joint_seed_statistics.md) for their corresponding stages.
+[Release status](release_status.md) identifies external artifacts and integrations still required.
+The older single-seed and 60-test presentation utilities use different statistical definitions.

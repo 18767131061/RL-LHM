@@ -63,7 +63,15 @@ def validate_profile(profile):
     if not isinstance(profile, Mapping):
         raise ValueError("Risk profile must be an object")
     cohort = profile.get("cohort")
-    if cohort not in PAIRS or profile.get("other_weight") != 0.4:
+    if cohort not in PAIRS:
+        raise ValueError("Risk profile requires a known cohort")
+    if profile.get("protocol") == "oat":
+        # A new OAT search also sweeps the shared background axis. Existing
+        # joint-grid/LOCO profiles retain their fixed background semantics.
+        other = profile.get("other_weight")
+        if type(other) not in (int, float) or not math.isfinite(other) or other not in VALUES:
+            raise ValueError("OAT other_weight must be in {0.1,...,1.5}")
+    elif profile.get("other_weight") != 0.4:
         raise ValueError("Joint-grid profile requires known cohort and fixed other_weight=0.4")
     pairs = PAIRS[cohort]
     if profile.get("protocol") == "loco":
@@ -77,6 +85,8 @@ def validate_profile(profile):
             raise ValueError("Duplicate unordered LOCO search pair")
     expected = {"--".join(pair) for pair in pairs}
     weights = profile.get("pair_weights", {})
+    if not isinstance(weights, Mapping):
+        raise ValueError("Profile pair_weights must be an object")
     if set(weights) != expected:
         raise ValueError("Profile must specify each independent unordered pair exactly once")
     if any(type(v) not in (int, float) or not math.isfinite(v) or v not in VALUES for v in weights.values()):

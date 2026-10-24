@@ -4,8 +4,9 @@
 Requires classification_overall/lesion_detection with nested bootstrap intervals
 and helper scripts under the experiment root's scripts/ directory. It cannot
 directly consume evaluate_paper_protocol.py outputs. The paired-patient tool
-remains usable after explicit identity/header adaptation preserving all patients;
-see README.md's Evaluation interface notes. No automatic adapter is supplied.
+accepts patient_id or logical_key while preserving all patients; it remains a
+single-seed statistic. Use evaluation/joint_seed_statistics.py for the current
+canonical five-seed exports.
 """
 
 from __future__ import annotations
@@ -67,6 +68,8 @@ def metrics_path(root: Path, method: str, seed: int) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--allow-legacy-protocol", action="store_true",
+                        help="Explicitly use the older experiment layout and statistical/evaluation definitions")
     parser.add_argument("--root", required=True)
     parser.add_argument("--cohort", choices=("private", "public"), required=True)
     parser.add_argument("--python", required=True)
@@ -81,6 +84,9 @@ def main() -> None:
         help="Fail unless all R1-1 per-Seed inputs carry a test manifest and evaluation metadata",
     )
     args = parser.parse_args()
+    if not args.allow_legacy_protocol:
+        parser.error("Legacy interface: pass --allow-legacy-protocol only for the older experiment layout; "
+                     "use evaluate_paper_protocol.py and joint_seed_statistics.py for current outputs")
     root = Path(args.root).resolve()
     python = str(Path(args.python).resolve())
     if args.strict_provenance:

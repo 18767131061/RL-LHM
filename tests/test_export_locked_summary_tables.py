@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from evaluation.export_locked_summary_tables import (
     CLASSIFICATION_METRICS, MODEL_GROUPS, metric_cell, parse_locked_tex_summary,
-    range_cell, render_tables, validate_paired_family, classification_note,
+    range_cell, render_tables, validate_paired_family, classification_note, paired_group_summaries,
 )
 
 SEEDS = [42, 2026, 3407, 1234, 5678]
@@ -125,27 +125,76 @@ class LockedTableTests(unittest.TestCase):
                 row['bh_q'] = '0.9000'
         before = copy.deepcopy(records)
         note = classification_note(records, SEEDS, 'private')
-        self.assertIn('0.1000--0.5000 versus SFT', note)
-        self.assertIn('0.2000--0.2000 versus vanilla GRPO', note)
+        self.assertIn('Versus SFT, macro-F1: 0/5, 0/5, 5/5; $q$ 0.1000--0.5000.', note)
+        self.assertIn('Versus vanilla GRPO, macro-F1: 0/5, 0/5, 5/5; $q$ 0.2000--0.2000.', note)
         self.assertNotIn('0.9000', note)
         self.assertEqual(records, before)
         zh = classification_note(records, SEEDS, 'private', language='zh')
         self.assertIn('0.1000--0.5000', zh)
-        for forbidden in ('0/5', 'n.s.', 'Significant seeds'):
+        self.assertIn('Legacy per-seed', note)
+        self.assertIn('not joint five-seed tests', note)
+        self.assertIn('不是五seed联合检验', zh)
+        for forbidden in ('n.s.', 'Significant seeds'):
             self.assertNotIn(forbidden, note)
 
-    def test_note_refuses_threshold_or_identity_mismatch(self):
-        for q in ('0.0499', '0.0500'):
+    def test_note_and_export_accept_all_three_threshold_outcomes(self):
+        for q, counts in (('0.0499', (5, 0, 0)), ('0.0500', (0, 5, 0)), ('0.0501', (0, 0, 5))):
             records = fixtures()
-            records[0]['bh_q'] = q
-            with self.assertRaises(ValueError):
-                classification_note(records, SEEDS, 'private')
+            for row in records:
+                row['bh_q'] = q
+            source = source_fixture()
+            source_before, records_before = copy.deepcopy(source), copy.deepcopy(records)
+            with self.subTest(q=q):
+                groups = paired_group_summaries(records, SEEDS, 'private')
+                self.assertEqual(len(groups), 6)
+                for group in groups:
+                    self.assertEqual(tuple(group[key] for key in
+                        ('below_threshold', 'equal_threshold', 'above_threshold')), counts)
+                    self.assertEqual((group['q_min'], group['q_max']), (q, q))
+                    self.assertEqual(group['tests'], 5)
+                output = render_tables(source, records)
+                self.assertIn(f'$q$ {q}--{q}', output['classification_private_note.tex'])
+                self.assertIn(', '.join(f'{n}/5' for n in counts), output['classification_private_note.tex'])
+                self.assertIn('、'.join(f'{n}/5' for n in counts), output['classification_private_note_zh.tex'])
+                self.assertEqual(records, records_before)
+                self.assertEqual(source, source_before)
+
+    def test_group_counts_do_not_mix_endpoints_or_cohorts_or_round_threshold(self):
+        records = fixtures()
+        q_values = ['0.00001', '0.04999', '0.05000', '0.05001', '1.00000']
+        selected = [row for row in records if row['cohort'] == 'private'
+                    and row['comparator'] == 'SFT' and row['metric'] == 'accuracy']
+        for row, q in zip(selected, q_values):
+            row['bh_q'] = q
+        original = copy.deepcopy(records)
+        private = paired_group_summaries(records, SEEDS, 'private')
+        public = paired_group_summaries(records, SEEDS, 'public')
+        self.assertEqual(private[0], dict(cohort='private', comparator='SFT', metric='accuracy', tests=5,
+            below_threshold=2, equal_threshold=1, above_threshold=2, q_min='0.00001', q_max='1.00000'))
+        self.assertTrue(all(row['below_threshold'] == row['equal_threshold'] == 0 and row['above_threshold'] == 5
+                            for row in private[1:] + public))
+        note = classification_note(records, SEEDS, 'private')
+        self.assertIn('Versus SFT, Accuracy: 2/5, 1/5, 2/5; $q$ 0.00001--1.00000.', note)
+        self.assertEqual(records, original)
+        # A narrow range straddling the threshold must remain distinguishable.
+        for row, q in zip(selected, ['0.04999', '0.04999', '0.05000', '0.05001', '0.05001']):
+            row['bh_q'] = q
+        self.assertIn('$q$ 0.04999--0.05001', classification_note(records, SEEDS, 'private'))
+        self.assertEqual([row['raw_p'] for row in records], [row['raw_p'] for row in original])
+        self.assertEqual([row['bh_q'] for row in original[:5]], q_values)
+
+    def test_note_refuses_identity_mismatch_and_unknown_cohort_or_language(self):
         records = fixtures()
         records[0]['seed'] = records[1]['seed']
         with self.assertRaises(ValueError):
             classification_note(records, SEEDS, 'private')
         with self.assertRaises(ValueError):
             classification_note(fixtures(), SEEDS, 'unknown')
+        with self.assertRaises(ValueError):
+            classification_note(fixtures(), SEEDS, 'private', language='unknown')
+        for seeds in (SEEDS[:-1], [42, '42', 2026, 3407, 1234]):
+            with self.subTest(seeds=seeds), self.assertRaises(ValueError):
+                validate_paired_family(fixtures(), seeds)
 
     def test_missing_extra_or_duplicate_model_not_silently_dropped(self):
         for change in ('missing', 'extra', 'duplicate'):
@@ -181,6 +230,7 @@ class LockedTableTests(unittest.TestCase):
                r'\begin{tabular}{@{}p{5.2cm}cccc@{}}\toprule '
                r'Model & Accuracy & Precision & Recall & F1 \\\midrule ' +
                outputs['classification_private.tex'] + r'\bottomrule\end{tabular}\par\bigskip ' +
+               outputs['classification_private_note.tex'] + r'\par\bigskip ' +
                r'\begin{tabular}{l}'+signed+r'\\\end{tabular}\end{document}')
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)

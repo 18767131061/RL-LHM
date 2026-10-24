@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Evaluate Qwen predictions with patient- and lesion-level uncertainty."""
+"""Legacy evaluation only: GT-positive voting and historical class-aware matching.
+
+Use evaluate_paper_protocol.py for the current paper protocol. Running this
+historical implementation requires explicit --allow-legacy-protocol consent.
+"""
 
 from __future__ import annotations
 
@@ -27,7 +31,9 @@ CLASSES = ["HCC", "ICC", "FNH", "HA_Hemangioma", "nodule_CYST"]
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--allow-legacy-protocol", action="store_true",
+                        help="Acknowledge historical GT-positive voting and matching; not the current paper protocol")
     parser.add_argument("--predictions", required=True)
     parser.add_argument("--metadata", required=True)
     parser.add_argument("--output-dir", required=True)
@@ -46,7 +52,11 @@ def parse_args() -> argparse.Namespace:
         choices=("logical_key", "statistical_patient_id"),
         default="logical_key",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not args.allow_legacy_protocol:
+        parser.error("Legacy protocol disabled. Use evaluation/evaluate_paper_protocol.py, or explicitly pass --allow-legacy-protocol to reproduce historical behavior.")
+    print("WARNING: LEGACY PROTOCOL: GT-positive-only diagnostic votes, shared metadata boxes, and historical class-aware matching. These results are not interchangeable with evaluate_paper_protocol.py.", file=sys.stderr)
+    return args
 
 
 def canon_label(value: object) -> str | None:

@@ -207,6 +207,8 @@ def wait_for_capacity_gpu(
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--allow-legacy-protocol", action="store_true",
+                        help="Explicitly use the older experiment layout and statistical/evaluation definitions")
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--variant", required=True)
     parser.add_argument("--seed", type=int, required=True)
@@ -229,6 +231,9 @@ def main() -> None:
     parser.add_argument("--expected-patients", type=int)
     parser.add_argument("--dataset-label")
     args = parser.parse_args()
+    if not args.allow_legacy_protocol:
+        parser.error("Legacy interface: pass --allow-legacy-protocol only for the older experiment layout; "
+                     "use evaluate_paper_protocol.py and joint_seed_statistics.py for current outputs")
     if args.minimum_free_mib <= 0 or args.poll_seconds <= 0:
         parser.error("--minimum-free-mib and --poll-seconds must be positive")
 

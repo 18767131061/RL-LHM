@@ -186,6 +186,7 @@ def evaluate(manifest: Any, prediction_path: Path, thresholds: Sequence[float]) 
         (protocol, threshold): {"tp": 0, "fp": 0, "fn": 0, "gt_instances": 0, "predicted_instances": 0, "iou_sum": 0.0}
         for protocol in PROTOCOLS for threshold in thresholds
     }
+    patient_totals = {patient_id: {key: dict.fromkeys(counts, 0) for key, counts in totals.items()} for patient_id in patients}
     for order, group in enumerate(groups):
         prediction = predictions[group["group_id"]]
         try:
@@ -220,10 +221,10 @@ def evaluate(manifest: Any, prediction_path: Path, thresholds: Sequence[float]) 
                         [item.label for item in truth], [item.label for item in phase_predictions],
                         protocol, threshold,
                     )
-                    current = totals[(protocol, threshold)]
-                    for name in ("tp", "fp", "fn", "gt_instances", "predicted_instances"):
-                        current[name] += getattr(result, name)
-                    current["iou_sum"] += result.mean_iou_with_misses_zero * result.gt_instances
+                    for current in (totals[(protocol, threshold)], patient_totals[group["patient_id"]][(protocol, threshold)]):
+                        for name in ("tp", "fp", "fn", "gt_instances", "predicted_instances"):
+                            current[name] += getattr(result, name)
+                        current["iou_sum"] += result.mean_iou_with_misses_zero * result.gt_instances
 
     patient_details = []
     for patient_id in sorted(patients):
@@ -247,6 +248,17 @@ def evaluate(manifest: Any, prediction_path: Path, thresholds: Sequence[float]) 
         })
     return {
         "protocol_version": PROTOCOL_VERSION,
+        "evaluation_identity": {
+            "manifest_sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
+            "aggregation_rule": "group_plurality_patient_plurality_mean_finite_nll_fixed_class_order_v1",
+        },
+        "patient_detection": [
+            {"patient_id": patient_id, "detection": {
+                protocol: [{"iou_threshold": threshold, **patient_totals[patient_id][(protocol, threshold)]}
+                           for threshold in thresholds]
+                for protocol in PROTOCOLS
+            }} for patient_id in sorted(patients)
+        ],
         "classes": classes,
         "macro_classes": macro_classes,
         "classification": metrics,
@@ -289,9 +301,15 @@ def main() -> None:
     parser.add_argument("--predictions", type=Path, required=True, help="One JSONL prediction record per manifest group")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--iou-thresholds", type=float, nargs="+", default=[0.5])
+    parser.add_argument("--model-name", help="Run identity for joint five-seed statistics")
+    parser.add_argument("--model-seed", type=int, help="Training or inference seed that produced these predictions")
     args = parser.parse_args()
+    if (args.model_name is None) != (args.model_seed is None):
+        parser.error("--model-name and --model-seed must be supplied together")
     try:
         result = evaluate(_read_json(args.manifest.read_text(encoding="utf-8")), args.predictions, args.iou_thresholds)
+        if args.model_name is not None:
+            result["run_identity"] = {"model_name": _identifier(args.model_name, "model_name"), "seed": args.model_seed}
         result["sources"] = {
             name: {"path": str(path.resolve()), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
             for name, path in (("manifest", args.manifest), ("predictions", args.predictions))

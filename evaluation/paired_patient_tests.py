@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Paired patient-level tests for two model prediction tables."""
+"""Legacy single-seed patient-paired tests for two prediction tables.
+
+Use joint_seed_statistics.py for the fixed-five-seed manuscript protocol.
+"""
 
 from __future__ import annotations
 
@@ -29,7 +32,9 @@ def read_predictions(path: Path) -> dict[str, dict[str, str]]:
         rows = list(csv.DictReader(stream))
     result = {}
     for row in rows:
-        key = row["logical_key"]
+        key = row.get("logical_key") or row.get("patient_id")
+        if not key or (row.get("logical_key") and row.get("patient_id") and row["logical_key"] != row["patient_id"]):
+            raise RuntimeError(f"Missing or conflicting patient identifier in {path}")
         if key in result:
             raise RuntimeError(f"Duplicate patient key in {path}: {key}")
         result[key] = row
@@ -202,6 +207,7 @@ def main() -> None:
         ),
     }
     result = {
+        "analysis": "legacy_single_seed_patient_paired",
         "reference": args.reference_name,
         "candidate": args.candidate_name,
         "patients": n,

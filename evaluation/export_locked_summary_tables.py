@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Export grouped five-seed summaries while preserving locked decimal strings.
+"""Export legacy grouped summaries while preserving supplied decimal strings.
 
 This presentation-only tool validates existing paired records and metric domains;
 it performs no evaluation, interval estimation, statistical test or BH correction.
+Its 60-comparison family contains separate per-seed tests, not joint five-seed
+inference. Supplied q-values determine the notes; no conclusion is prescribed.
 """
 from __future__ import annotations
 import argparse
@@ -80,6 +82,8 @@ def parse_locked_tex_summary(cell, *, domain='performance'):
 
 def validate_paired_family(records, seeds):
     """Check the 60 existing cohort/seed/comparator/endpoint identities and q's."""
+    if len(seeds) != 5 or len({str(seed) for seed in seeds}) != 5:
+        raise ValueError('Expected five distinct training seeds')
     expected = {(cohort, comparator, metric, str(seed))
                 for cohort in ('private', 'public')
                 for comparator in ('SFT', 'vanilla GRPO')
@@ -101,31 +105,58 @@ def tex_escape(value):
                     '$': r'\$', '{': r'\{', '}': r'\}'}.get(c, c) for c in str(value))
 
 
-def classification_note(records, seeds, cohort, *, language='en'):
-    """Describe the existing tests; ranges are five q values, not new tests."""
+def paired_group_summaries(records, seeds, cohort):
+    """Describe each five-record group without changing the 60-test family.
+
+    Keep exact supplied q-range endpoints so display rounding cannot obscure
+    which side of 0.05 a value is on. Counts use the existing strict q<0.05 rule;
+    equality is reported separately rather than silently grouped with either side.
+    """
     validate_paired_family(records, seeds)
+    if cohort not in ('private', 'public'):
+        raise ValueError('Unknown paired-family cohort')
     cohort_rows = [r for r in records if r['record_type'] == 'paired_difference'
                    and r['cohort'] == cohort]
-    if len(cohort_rows) != 30 or any(Decimal(r['bh_q']) <= Decimal('0.05')
-                                    for r in cohort_rows):
-        raise ValueError('The fixed q>0.05 note does not describe these records')
-    ranges = []
+    groups = []
     for comparator in ('SFT', 'vanilla GRPO'):
-        rows = [r for r in cohort_rows if r['comparator'] == comparator
-                and r['metric'] == 'macro_f1']
-        if len(rows) != 5 or {r['seed'] for r in rows} != {str(s) for s in seeds}:
-            raise ValueError('Macro-F1 note requires exactly the five specified seeds')
-        qs = [Decimal(r['bh_q']) for r in rows]
-        ranges.append(f'{min(qs):.4f}--{max(qs):.4f}')
+        for metric in PAIRED_METRICS:
+            rows = [r for r in cohort_rows if r['comparator'] == comparator and r['metric'] == metric]
+            qs = [Decimal(r['bh_q']) for r in rows]
+            groups.append({
+                'cohort': cohort, 'comparator': comparator, 'metric': metric,
+                'tests': len(rows),
+                'below_threshold': sum(q < Decimal('0.05') for q in qs),
+                'equal_threshold': sum(q == Decimal('0.05') for q in qs),
+                'above_threshold': sum(q > Decimal('0.05') for q in qs),
+                'q_min': min(rows, key=lambda row: Decimal(row['bh_q']))['bh_q'],
+                'q_max': max(rows, key=lambda row: Decimal(row['bh_q']))['bh_q'],
+            })
+    return groups
+
+
+def classification_note(records, seeds, cohort, *, language='en'):
+    """Report existing per-seed tests; group ranges are not new joint tests."""
+    groups = paired_group_summaries(records, seeds, cohort)
+    labels = {'accuracy': 'Accuracy', 'macro_recall': 'macro-Recall', 'macro_f1': 'macro-F1'}
     if language == 'en':
-        return ('BH-adjusted paired comparisons of RL-LHM with SFT and vanilla GRPO gave '
-                '$q>0.05$ for Accuracy, macro-Recall and macro-F1 across the five seeds. '
-                f'For macro-F1, $q$ ranged from {ranges[0]} versus SFT and '
-                f'{ranges[1]} versus vanilla GRPO.\n')
+        intro = ('Legacy per-seed paired comparisons of RL-LHM, using the supplied '
+                 '60-comparison BH family; these are not joint five-seed tests. '
+                 'For each comparator and endpoint, counts out of five are reported '
+                 'at $q<0.05$, $q=0.05$ and $q>0.05$, followed by the existing $q$ range. ')
+        details = [
+            f'Versus {row["comparator"]}, {labels[row["metric"]]}: '
+            f'{row["below_threshold"]}/5, {row["equal_threshold"]}/5, {row["above_threshold"]}/5; '
+            f'$q$ {row["q_min"]}--{row["q_max"]}.' for row in groups]
+        return intro + ' '.join(details) + '\n'
     if language == 'zh':
-        return ('五个seed中，RL-LHM与SFT及vanilla GRPO的Accuracy、macro-Recall和macro-F1配对比较'
-                '经BH校正后均为$q>0.05$。macro-F1的$q$值范围分别为'
-                f'{ranges[0]}（对SFT）和{ranges[1]}（对vanilla GRPO）。\n')
+        intro = ('旧版逐seed配对比较沿用所给60项BH比较家族，不是五seed联合检验。'
+                 '以下各比较方法和指标依次列出五个既有检验中$q<0.05$、$q=0.05$和$q>0.05$的数量，'
+                 '以及既有$q$值范围。')
+        details = [
+            f'对{row["comparator"]}，{labels[row["metric"]]}：'
+            f'{row["below_threshold"]}/5、{row["equal_threshold"]}/5、{row["above_threshold"]}/5；'
+            f'$q$ {row["q_min"]}--{row["q_max"]}。' for row in groups]
+        return intro + ''.join(details) + '\n'
     raise ValueError('Unsupported note language')
 
 

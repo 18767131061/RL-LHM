@@ -55,8 +55,12 @@ def effective_framework_gpus(default_gpus: int) -> int:
 
 
 def compute_grad_accum(global_batch: int, per_device_batch: int, gpu_count: int) -> int:
-    denom = max(1, int(per_device_batch) * int(gpu_count))
-    return max(1, math.ceil(float(global_batch) / float(denom)))
+    if any(type(value) is not int or value <= 0 for value in (global_batch, per_device_batch, gpu_count)):
+        raise ValueError("Batch sizes and data-parallel GPU count must be positive integers")
+    denom = per_device_batch * gpu_count
+    if global_batch % denom:
+        raise ValueError("global_batch must be divisible by per_device_batch * gpu_count")
+    return global_batch // denom
 
 
 def sanitize_name(value: str) -> str:
@@ -197,21 +201,25 @@ def export_llamafactory_sft_dataset(
 ) -> Tuple[Path, Path, int]:
     raw = load_json_array(json_path)
     records: List[Dict[str, Any]] = []
-    for obj in raw:
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("SFT source must contain a nonempty list of records")
+    for index, obj in enumerate(raw):
         msgs = obj.get("messages") or obj.get("conversations")
         if not msgs:
-            continue
+            raise ValueError(f"SFT record {index} is missing messages")
         system_text, user_text, answer_text = split_system_user_answer(msgs)
         images = extract_images_from_user(msgs, dataset_root)
-        if not user_text or not answer_text or len(images) < min_images:
-            continue
-        sample_images = images[:min_images]
+        if not user_text or not answer_text or len(images) != min_images:
+            raise ValueError(f"SFT record {index} needs a prompt, answer and exactly {min_images} images")
+        if not all(Path(image).is_file() for image in images):
+            raise ValueError(f"SFT record {index} has missing image files")
+        sample_images = images
         if user_text_transform is not None:
             user_text = user_text_transform(user_text, obj, sample_images)
         if answer_text_transform is not None:
             answer_text = answer_text_transform(answer_text, obj, sample_images)
         if not user_text or not answer_text:
-            continue
+            raise ValueError(f"SFT transform removed the prompt or answer for record {index}")
         chat_messages = []
         if system_text:
             chat_messages.append({"role": "system", "content": system_text})
@@ -271,7 +279,12 @@ def build_llamafactory_sft_config(
     lora_target: str = "",
     additional_target: str = "",
     use_rslora: bool = False,
+    seed: int = 2026,
+    data_seed: int | None = None,
+    precision: str | None = None,
 ) -> str:
+    if precision not in {None, "bf16", "fp16", "fp32"}:
+        raise ValueError("precision must be bf16, fp16 or fp32")
     grad_acc = compute_grad_accum(global_batch, per_device_batch, gpu_count)
     lines = [
         ("model_name_or_path", model_name_or_path),
@@ -289,7 +302,9 @@ def build_llamafactory_sft_config(
         ("logging_steps", DEFAULT_LOGGING_STEPS),
         ("save_strategy", "epoch"),
         ("save_total_limit", DEFAULT_SAVE_TOTAL_LIMIT),
-        ("overwrite_output_dir", True),
+        ("overwrite_output_dir", False),
+        ("seed", int(seed)),
+        ("data_seed", int(seed if data_seed is None else data_seed)),
         ("plot_loss", True),
         ("per_device_train_batch_size", per_device_batch),
         ("gradient_accumulation_steps", grad_acc),
@@ -298,7 +313,8 @@ def build_llamafactory_sft_config(
         ("lr_scheduler_type", lr_scheduler_type),
         ("warmup_ratio", warmup_ratio),
         ("optim", optim),
-        ("bf16", infer_bf16()),
+        ("bf16", infer_bf16() if precision is None else precision == "bf16"),
+        ("fp16", precision == "fp16"),
         ("gradient_checkpointing", True),
         # Multimodal custom models using trust_remote_code can conflict with reentrant checkpointing.
         # Use non-reentrant checkpointing to avoid repeated-backward graph errors.
@@ -323,22 +339,32 @@ def build_llamafactory_sft_config(
     return render_yaml_lines(lines)
 
 
-def build_llamafactory_command(config_path: Path) -> str:
-    return f"llamafactory-cli train {shlex.quote(str(config_path))}"
+def build_llamafactory_command(config_path: Path, gpu_count: int | None = None) -> str:
+    prefix = ""
+    if gpu_count is not None:
+        if type(gpu_count) is not int or gpu_count <= 0:
+            raise ValueError("gpu_count must be a positive integer")
+        prefix = f"FORCE_TORCHRUN=1 NNODES=1 NODE_RANK=0 NPROC_PER_NODE={gpu_count} "
+    return f"{prefix}llamafactory-cli train {shlex.quote(str(config_path))}"
 
 
-def build_eval_command(data_mode: str, model_family: str, model_dir: str, out_csv: Path) -> str:
-    eval_name = "test_internvl.py" if model_family == "internvl" else "test_new.py"
-    eval_file = PROJECT_ROOT / eval_name
-    parts = [
-        f"python3 {shlex.quote(str(eval_file))}",
-        f"--data_mode {shlex.quote(data_mode)}",
-        f"--model_dir {shlex.quote(model_dir)}",
-        f"--out_csv {shlex.quote(str(out_csv))}",
+def build_eval_command(data_mode: str, model_family: str, model_dir: str, out_csv: Path,
+                       *, json_path: str, data_root: str, manifest: str, group_map: str,
+                       seed: int = 2026, model_name: str = "SFT") -> str:
+    root = Path(__file__).resolve().parents[1]
+    entry = "infer_qwen_real961.py" if model_family in {"qwen", "qwen3vl", "qwen3_vl"} else "infer_hf_vlm_revision.py"
+    predictions = out_csv.with_suffix(".jsonl")
+    commands = [
+        ["python3", str(root / "inference" / entry), "--model-dir", model_dir,
+         "--json-path", json_path, "--data-root", data_root, "--output", str(out_csv),
+         "--seed", str(seed), "--max-new-tokens", "256", "--decoding", "greedy"],
+        ["python3", str(root / "evaluation/import_inference_predictions.py"), "--csv", str(out_csv),
+         "--manifest", manifest, "--group-map", group_map, "--output", str(predictions)],
+        ["python3", str(root / "evaluation/evaluate_paper_protocol.py"), "--manifest", manifest,
+         "--predictions", str(predictions), "--output-dir", str(out_csv.parent / "metrics"),
+         "--model-name", model_name, "--model-seed", str(seed)],
     ]
-    if model_family != "internvl":
-        parts.insert(2, f"--model_family {shlex.quote(model_family)}")
-    return " ".join(parts)
+    return "\n".join(shlex.join(command) for command in commands)
 
 
 def default_output_root(data_mode: str) -> str:
@@ -398,9 +424,17 @@ def prepare_sft_framework_artifacts(
     lora_target: str = "",
     additional_target: str = "",
     use_rslora: bool = False,
+    seed: int = 2026,
+    data_seed: int | None = None,
+    eval_json: str = "",
+    eval_manifest: str = "",
+    eval_group_map: str = "",
+    precision: str | None = None,
     user_text_transform: Optional[Callable[[str, Dict[str, Any], List[str]], str]] = None,
     answer_text_transform: Optional[Callable[[str, Dict[str, Any], List[str]], str]] = None,
 ) -> Dict[str, Any]:
+    if any((eval_json, eval_manifest, eval_group_map)) and not all((eval_json, eval_manifest, eval_group_map)):
+        raise ValueError("Evaluation requires eval_json, eval_manifest and eval_group_map together")
     root = framework_artifact_root(family_tag, data_mode, exp_name, framework_root)
     sft_data_dir = root / "llamafactory_data"
     cfg_dir = root / "configs"
@@ -458,19 +492,27 @@ def prepare_sft_framework_artifacts(
             lora_target=lora_target,
             additional_target=additional_target,
             use_rslora=use_rslora,
+            seed=seed,
+            data_seed=data_seed,
+            precision=precision,
         ),
     )
 
-    sft_cmd = build_llamafactory_command(sft_cfg)
+    sft_cmd = build_llamafactory_command(sft_cfg, framework_gpus)
     eval_csv = eval_dir / "sft.csv"
-    eval_cmd = build_eval_command(data_mode, model_family, sft_output_dir, eval_csv)
+    eval_cmd = (build_eval_command(data_mode, model_family, sft_output_dir, eval_csv,
+                                  json_path=eval_json, data_root=dataset_root, manifest=eval_manifest,
+                                  group_map=eval_group_map, seed=seed, model_name=family_tag + " SFT")
+                if eval_json else "")
 
     sft_cmd_file = cmd_dir / "run_sft.sh"
     eval_cmd_file = cmd_dir / "run_eval_sft.sh"
     write_text(sft_cmd_file, f"#!/usr/bin/env bash\nset -e\n{sft_cmd}\n")
-    write_text(eval_cmd_file, f"#!/usr/bin/env bash\nset -e\n{eval_cmd}\n")
+    if eval_cmd:
+        write_text(eval_cmd_file, f"#!/usr/bin/env bash\nset -euo pipefail\n{eval_cmd}\n")
     os.chmod(sft_cmd_file, 0o755)
-    os.chmod(eval_cmd_file, 0o755)
+    if eval_cmd:
+        os.chmod(eval_cmd_file, 0o755)
 
     readme = root / "README.md"
     readme_lines = [
@@ -487,6 +529,8 @@ def prepare_sft_framework_artifacts(
         f"- per_device_batch: `{per_device_batch}`",
         f"- global_batch: `{global_batch}`",
         f"- cutoff_len: `{cutoff_len}`",
+        f"- seed: `{seed}`; data_seed: `{seed if data_seed is None else data_seed}`",
+        f"- evaluation prepared: `{bool(eval_cmd)}` (requires explicit source/group mapping)",
         f"- optim: `{optim}`",
         f"- train_json: `{train_json}`",
         f"- val_json: `{val_json}`",
@@ -522,7 +566,7 @@ def prepare_sft_framework_artifacts(
         "sft_cmd": sft_cmd,
         "sft_cmd_file": sft_cmd_file,
         "eval_cmd": eval_cmd,
-        "eval_cmd_file": eval_cmd_file,
+        "eval_cmd_file": eval_cmd_file if eval_cmd else None,
         "eval_csv": eval_csv,
         "readme": readme,
         "counts": {

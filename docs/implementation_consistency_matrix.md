@@ -12,8 +12,15 @@
 | Data isolation | `data/manifest.py`, `preprocess/center_split.py` | `tests/test_data_manifest.py`, `tests/test_preprocess_and_inference.py` |
 | Paper-protocol evaluation CLI | `evaluation/evaluate_paper_protocol.py` | `tests/test_paper_protocol_cli.py` |
 | Separate train/validation preparation and eight configurations | `preprocess/build_verl_real961_dataset.py`, `training/run_verl_lhm_variant.py` | `tests/test_training_data_cli.py` |
-| Reward-loop source patch | `rl/patch_verl_agent_loop_logprobs.py` | `tests/test_training_data_cli.py` (synthetic source only) |
-| Existing 60-comparison display, eight factorial settings plus Uniform, full-coverage aggregation view | `evaluation/table_presentation.py` | `tests/test_table_presentation.py` (artificial aggregate fixtures; original fields retained) |
+| Reward-loop source patch | `rl/patch_verl_agent_loop_logprobs.py` | `tests/test_agent_logprob_patch.py` (synthetic source only) |
+| Legacy 60-comparison display, eight factorial settings plus Uniform, full-coverage aggregation view | `evaluation/table_presentation.py` | `tests/test_table_presentation.py` (artificial aggregate fixtures; original fields retained) |
 | Configuration helpers without optional Torch | `rl/__init__.py`, `rl/policy_contract.py` | `tests/test_optional_rl_import.py` (same exported objects when Torch is installed) |
 
-The table describes the final public 2D scope. GPU training and model inference remain environment-dependent.
+| Five-seed SFT preparation and current evaluation commands | `training/prepare_sft_runs.py`, `training/framework_sft_common.py` | `tests/test_sft_workflow.py` (configuration and stub launcher, no training) |
+| Split-preserving detector export | `preprocess/build_real961_detector_dataset.py` | `tests/test_detector_export_contract.py` |
+| Explicit inference/evaluation mapping, raw-logit NLL and sampling resume | `evaluation/import_inference_predictions.py`, `inference/decoding.py`, `inference/resume.py` | `tests/test_inference_protocol_bridge.py`, `tests/test_inference_resume.py` (stub models) |
+| Joint five-seed paired statistics | `evaluation/joint_seed_statistics.py`, `aggregation/summarize_seed_results.py` | `tests/test_joint_seed_statistics.py` (exact small-population enumeration and nonlinear recomputation) |
+| Response logprob coverage and runtime preflight | `rl/patch_verl_agent_loop_logprobs.py`, `training/rl_preflight_check.py` | `tests/test_agent_logprob_patch.py`, `tests/test_runtime_preflight.py` |
+| One-at-a-time severity experiments | `training/rars_oat.py` | `tests/test_rars_oat.py` (synthetic run receipts and real evaluation, no training) |
+
+The table describes the public 2D scope. GPU training and model inference remain environment-dependent.

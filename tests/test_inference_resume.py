@@ -105,6 +105,7 @@ def test_actual_inference_entry_preserves_converter_center_aliases(tmp_path, mon
         def eval(self): pass
         def generate(self, **kwargs):
             return types.SimpleNamespace(sequences=torch.tensor([[0, 1]]),
+                                         logits=(torch.tensor([[0., 1.]]),),
                                          scores=(torch.tensor([[0., 1.]]),))
 
     monkeypatch.setattr(entry.AutoProcessor, "from_pretrained", lambda *a, **k: Processor())
@@ -170,6 +171,7 @@ def test_batched_qwen_scores_each_sample_with_its_own_logits(tmp_path, monkeypat
         def eval(self): pass
         def generate(self, **kwargs):
             return types.SimpleNamespace(sequences=torch.tensor([[0, 1], [0, 0]]),
+                                         logits=(torch.tensor([[0., 4.], [4., 0.]]),),
                                          scores=(torch.tensor([[0., 4.], [4., 0.]]),))
     monkeypatch.setattr(entry.AutoProcessor, "from_pretrained", lambda *a, **k: Processor())
     monkeypatch.setattr(entry.AutoModelForImageTextToText, "from_pretrained", lambda *a, **k: Model())
@@ -201,6 +203,7 @@ def test_hf_entry_bound_completion_reuse_and_model_change(tmp_path, monkeypatch)
     class Model:
         def generate(self, **kwargs):
             return types.SimpleNamespace(sequences=torch.tensor([[0, 1]]),
+                                         logits=(torch.tensor([[0., 1.]]),),
                                          scores=(torch.tensor([[0., 1.]]),))
     monkeypatch.setattr(entry.AutoProcessor, "from_pretrained", lambda *a, **k: Processor())
     monkeypatch.setattr(entry, "load_model", lambda *a, **k: (Model(), "synthetic"))

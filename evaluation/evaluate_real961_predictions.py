@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Entry point for the audited 190-patient real961 test set."""
+"""Legacy real961 wrapper; requires --allow-legacy-protocol.
+
+This retains historical evaluation semantics. Use evaluate_paper_protocol.py
+for current phase-specific annotations and all eligible diagnostic votes.
+"""
 
 import sys
 

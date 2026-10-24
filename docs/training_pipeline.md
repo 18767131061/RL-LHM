@@ -230,3 +230,14 @@ its shared strict parser dependency.
 ## Joint weight selection
 
 See [rars_joint_search.md](rars_joint_search.md) for the full joint-grid task, validation, recovery and freeze interfaces. The optional joint-grid interface defines a Cartesian candidate domain; the paper's OAT sensitivity protocol varies one parameter at a time against a fixed background.
+
+## SFT and OAT preparation
+
+[prepare_sft_runs.py](sft_workflow.md) produces five-seed framework configurations
+and explicit training scripts from separate fitting/validation JSONL inputs.
+[Runtime preflight](runtime_preflight.md) checks converted prompts, supervised
+targets, reward parsing and token limits before a GPU run.
+
+The [OAT planner/collector](rars_oat.md) sweeps one severity axis at a time,
+including the shared other-pair weight, while holding all other axes at one.
+The Cartesian interface above is a separate search protocol.

@@ -48,7 +48,8 @@ def inference_identity(model_dir, input_path, data_root, rows, settings, *, entr
             "data_root": str(data_root), "images": images, "settings": settings,
             "runtime_packages": versions,
             "entry_sha256": file_sha256(entry_path or Path(__file__).with_name("infer_qwen_real961.py")),
-            "resume_sha256": file_sha256(__file__)}
+            "resume_sha256": file_sha256(__file__),
+            "decoding_sha256": file_sha256(Path(__file__).with_name("decoding.py"))}
 
 
 def output_center(metadata: dict) -> str | None:

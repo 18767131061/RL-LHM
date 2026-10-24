@@ -6,6 +6,8 @@ from typing import Any
 
 import numpy as np
 
+from inference.decoding import DecodingConfig, unprocessed_logits
+
 
 def set_deterministic_seed(seed: int) -> None:
     random.seed(seed)
@@ -51,12 +53,14 @@ def generate_one(
     images: list[Any],
     device: str,
     max_new_tokens: int = 512,
+    decoding: DecodingConfig | None = None,
 ) -> tuple[str, float]:
     """Generate one structured completion and return text plus completion NLL."""
     try:
         import torch
     except ImportError as error:
         raise RuntimeError("generate_one requires torch") from error
+    decoding = decoding or DecodingConfig()
     if max_new_tokens <= 0:
         raise ValueError("max_new_tokens must be positive")
 
@@ -77,10 +81,10 @@ def generate_one(
     with torch.inference_mode():
         output = model.generate(
             **inputs,
-            do_sample=False,
+            **decoding.generation_kwargs(),
             max_new_tokens=max_new_tokens,
             return_dict_in_generate=True,
-            output_scores=True,
+            output_logits=True,
         )
     generated = output.sequences[:, input_length:]
     text = processor.batch_decode(
@@ -88,10 +92,9 @@ def generate_one(
         skip_special_tokens=True,
         clean_up_tokenization_spaces=False,
     )[0]
-    tokenizer = getattr(processor, "tokenizer", processor)
     nll = completion_nll(
-        output.scores,
+        unprocessed_logits(output),
         generated,
-        pad_token_id=getattr(tokenizer, "pad_token_id", None),
+        pad_token_id=None,
     )
     return text, nll

@@ -23,6 +23,12 @@ except ImportError:
     from resume import ResumeGuard, file_sha256, inference_identity, output_center
 
 
+try:
+    from .decoding import add_decoding_arguments, config_from_args, input_seed, unprocessed_logits
+except ImportError:
+    from decoding import add_decoding_arguments, config_from_args, input_seed, unprocessed_logits
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -106,7 +112,9 @@ def main() -> None:
     parser.add_argument("--image-max-pixels", type=int, default=512 * 512)
     parser.add_argument("--image-min-pixels", type=int, default=32 * 32)
     parser.add_argument("--seed", type=int, default=2026)
+    add_decoding_arguments(parser)
     args = parser.parse_args()
+    decoding = config_from_args(args)
     set_seed(args.seed)
 
     model_dir = Path(args.model_dir).resolve()
@@ -127,7 +135,7 @@ def main() -> None:
     settings = {"seed": args.seed, "device": args.device,
                 "max_new_tokens": args.max_new_tokens,
                 "image_max_pixels": args.image_max_pixels,
-                "image_min_pixels": args.image_min_pixels, "do_sample": False}
+                "image_min_pixels": args.image_min_pixels, "decoding": decoding.identity()}
     identity = inference_identity(model_dir, json_path, data_root, rows, settings)
     if identity["input_sha256"] != source_sha:
         raise RuntimeError("Input changed while it was read")
@@ -207,13 +215,15 @@ def main() -> None:
                 key: value.to(args.device) if hasattr(value, "to") else value
                 for key, value in inputs.items()
             }
+            if decoding.mode == "sample":
+                set_seed(input_seed(args.seed, key))
             with torch.inference_mode():
                 generated_output = model.generate(
                     **inputs,
                     max_new_tokens=args.max_new_tokens,
-                    do_sample=False,
+                    **decoding.generation_kwargs(),
                     return_dict_in_generate=True,
-                    output_scores=True,
+                    output_logits=True,
                 )
             prompt_length = inputs["input_ids"].shape[1]
             generated = generated_output.sequences[:, prompt_length:]
@@ -223,9 +233,9 @@ def main() -> None:
                 clean_up_tokenization_spaces=False,
             )[0].strip()
             avg_nll = completion_nll(
-                generated_output.scores,
+                unprocessed_logits(generated_output),
                 generated,
-                getattr(processor.tokenizer, "pad_token_id", None),
+                None,
             )
             writer.writerow(
                 {

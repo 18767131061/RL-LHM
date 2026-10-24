@@ -13,9 +13,13 @@ OAT varies one severity parameter at a time from 0.1 to 1.5 by 0.1,
 including the shared other-pair parameter, with other severity weights at 1.0.
 The five private/seven public axes give 75/105 axis points and 375/525
 seed evaluations. Reference points at 1.0 share a weight vector. These counts
-are not distinct complete-profile candidate counts. Selected values coincide
-with observed OAT peaks. The optional `training/rars_joint_grid.py` implements
-a different, explicit Cartesian search interface.
+are not distinct complete-profile candidate counts. The [OAT workflow](rars_oat.md) prepares those axes and collects complete
+five-seed validation outputs. Shared all-one vectors can reuse one run per
+seed, yielding 71/99 distinct profiles and 355/495 runs. Axis-wise selection
+does not establish a jointly optimal combined profile; train and evaluate the
+combined selection separately. The optional `training/rars_joint_grid.py`
+implements a different, explicit Cartesian search interface. Neither tool
+contains the original validation observations.
 
 Uniform sets all off-diagonal severity weights to 0.4, retaining the other
 Selected settings. RARS-off neutralizes scarcity, severity and
@@ -49,35 +53,20 @@ pooling per phase, a shared fixed 1024×384 projection, phase concatenation,
 and whole-vector L2 normalization. Cache metadata records the reference extractor identity; the cache contract
 checks the model and extraction settings before use.
 
-## DICOM reading and prepared input construction (D.1)
+## Prepared input construction (D.1)
 
-The author-supplied volume-reading utility uses SimpleITK ImageSeriesReader
-and GDCM discovery. It records spacing/origin/direction, transposes D×H×W
-arrays to H×W×D, and computes z positions as origin_z + k × spacing_z ×
-direction_zz while retaining native spatial sampling. This position calculation
-is not inter-phase registration.
+The public converters consume prepared three-phase images and per-phase boxes.
+They do not implement the complete CT-volume-to-input procedure. An experiment
+must specify series selection, HU/window handling, spatial correspondence,
+resampling if any, and eligibility rules for complete three-phase positions.
+Do not infer those operations from a converter's ability to read the prepared
+files. Record complete patient/group coverage in the evaluation manifest.
 
-A complete explicit window-center/width pair takes precedence. If either is
-missing, the code reads both values from the first DICOM (first value when
-multivalued); missing metadata falls back to the volume intensity range.
-Windowing clips the intensities returned by SimpleITK. Normalization maps the
-window to 0–255 and uint8. The example enables normalization without a fixed
-window. The manual RescaleSlope/RescaleIntercept multiplication is commented
-out; the code does not apply a second manual HU conversion.
-
-The utility reads complete series and demonstrates contours on nonzero-mask
-slices. Its calculated maximum-area slice index is not used for final input
-selection. It does not implement registration, resampling, interpolation,
-three-phase matching, box generation, or the final manifest. The private
-path-bearing original and mask script are not redistributed.
-
-The prepared interface retains all corresponding positions with complete
-three-phase inputs, without GT-guided/manual key-slice selection or extra top-k.
-Missing phases are not filled. Patient evaluation retains all 190/104 patients,
-including undefined diagnoses. Training background sampling, test-input
-coverage, and lesion-positive phase-slice detection are distinct operations.
-The conversion entry points consume already prepared images and annotations;
-they do not reconstruct upstream volume-to-input processing.
+The paper describes all eligible corresponding three-phase positions without
+GT-guided key-slice selection or an additional top-k limit. Missing phases are
+not filled. The evaluator retains patients with undefined diagnoses. Training
+background sampling, test-input coverage, and lesion-positive-phase detection
+are distinct operations and need separately recorded counts.
 
 ## Comparison models and detector stages (C.7; D)
 
@@ -90,12 +79,17 @@ accumulation, and data-parallel size for each auxiliary model explicitly.
 Effective batch size is device batch × accumulation × data-parallel size,
 with units of three-phase groups for VLMs and phase images for detectors.
 
-`preprocess/build_real961_detector_dataset.py` exports the private 771-patient
-development union and a separate 190-patient test set. Both YAML train and val
-point to that development export. Prepare distinct fitting and validation
-inputs when required by the intended training protocol. The preparation
-metadata describes the exported dataset. `phase_mapping.csv` records the supplied
-patient/position/phase relationship for downstream adapters.
+`training/prepare_sft_runs.py` prepares explicit five-seed SFT configurations;
+see [sft_workflow.md](sft_workflow.md). It records the device batch,
+accumulation, data-parallel size, precision and checkpoint policy.
+
+`preprocess/build_real961_detector_dataset.py` now preserves separate fitting,
+validation and test inputs by default, with distinct YAML paths and patient,
+group and image-path overlap checks. An explicit `--refit-trainval` export
+combines fitting and validation and sets `val: null`; it must follow a fixed
+training schedule without further checkpoint selection. Counts are configurable
+for private and public cohorts. The export records image/label hashes and
+`phase_mapping.csv`; see [detector_export.md](detector_export.md).
 
 The VLM adapter uses group plurality, fixed-order group ties, patient plurality,
 then mean finite completion NLL for patient ties, with fixed-order fallback
@@ -116,26 +110,24 @@ absence of a box does not imply NC. The repository supplies canonical matching
 and patient-metric modules; model-specific detector-to-patient readout adapters
 must be provided by the integrating application.
 
-## Classification statistics and manuscript table locations
+## Statistical interfaces
 
-The primary within-cohort comparisons are Full RL-LHM minus SFT and Full
-RL-LHM minus vanilla GRPO, using the same test patients and training seed.
-The main private/public classification tables (`tab:unified_private` and
-`tab:unified_public`) show one row per model with five-seed mean ± sample SD.
-A compact column counts significant seeds against Full RL-LHM for Accuracy,
-macro-Recall and macro-F1: 0/5 for each endpoint in both comparator rows.
-These decisions use the original family of 2 cohorts × 5 seeds × 2 comparators
-× 3 endpoints = 60 comparisons, whose BH q values all exceed 0.05.
-Macro-Precision and auxiliary comparisons remain outside this paired family;
-their untested fields must not be marked nonsignificant.
+The current joint-five-seed endpoint is the mean of within-seed metric
+differences. One patient-level permutation exchanges that patient's entire
+five-seed vector between the compared models; a bootstrap uses the same patient
+multiplicities across both models and all five seeds. Nonlinear metrics are
+recomputed before averaging. The executable implementation is
+`evaluation/joint_seed_statistics.py`; its default uses 100,000 permutations,
+10,000 bootstrap replicates and raw p-values. Optional BH correction has an
+explicit comparator-by-metric family within one invocation. See
+[joint_seed_statistics.md](joint_seed_statistics.md) for inputs and supported
+classification, per-class and detection endpoints.
 
-Supplementary Data S1 contains the original seed-specific Δ, patient-bootstrap
-95% CI, raw p, BH q and Accuracy discordant b/c counts under their full record
-identities. It also holds model-specific within-cohort, rare-class and LOCO
-intervals and auxiliary seed metrics. [Table presentation](table_presentation.md)
-describes the controlled export and preservation rules. Cross-seed sample SD
-and same-seed patient-bootstrap CIs describe different sources of uncertainty;
-neither p/q values nor interval endpoints are averaged across seeds. Significant-
-seed counts do not define a new test on the mean or establish equivalence.
-The LOCO Wilson/bootstrap intervals remain model-specific and are outside the
-paired 60-comparison family.
+The earlier `evaluation/paired_patient_tests.py` and
+`statistics/apply_r1_1_bh.py` implement seed-specific comparisons and an older
+60-test family. Their p/q values describe a different statistical object.
+The presentation tools in [table_presentation.md](table_presentation.md)
+consume supplied legacy summaries; they do not calculate the current joint
+statistic. Across-seed sample SD, patient-bootstrap intervals conditional on
+five fixed runs, and adjusted versus raw p-values must remain identified
+separately. No inference about actual significance is encoded in these docs.
