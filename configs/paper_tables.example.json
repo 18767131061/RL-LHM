@@ -1,0 +1,638 @@
+{
+  "schema_version": 1,
+  "seeds": [
+    42,
+    2026,
+    3407,
+    1234,
+    5678
+  ],
+  "cohorts": [
+    {
+      "id": "private",
+      "label": "Private cohort",
+      "classes": [
+        "HCC",
+        "ICC",
+        "FNH",
+        "HA_Hemangioma",
+        "nodule_CYST"
+      ],
+      "macro_classes": [
+        "HCC",
+        "ICC",
+        "FNH",
+        "HA_Hemangioma",
+        "nodule_CYST"
+      ],
+      "class_labels": {
+        "HCC": "HCC",
+        "ICC": "ICC",
+        "FNH": "FNH",
+        "HA_Hemangioma": "HH",
+        "nodule_CYST": "NC"
+      },
+      "model_order": [
+        "SFT",
+        "vanilla GRPO",
+        "Full RL-LHM",
+        "LLaVA-OneVision-1.5-4B SFT",
+        "Qwen2.5-VL-3B SFT",
+        "InternVL3.5-4B SFT",
+        "YOLOv8-X",
+        "YOLOv11-X",
+        "RT-DETR-L",
+        "Faster R-CNN (R50-FPN)"
+      ],
+      "models": {
+        "SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-01/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-01/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-01/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-01/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-01/seed-5678/metrics.json"
+          }
+        ],
+        "vanilla GRPO": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-02/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-02/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-02/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-02/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-02/seed-5678/metrics.json"
+          }
+        ],
+        "Full RL-LHM": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-03/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-03/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-03/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-03/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-03/seed-5678/metrics.json"
+          }
+        ],
+        "LLaVA-OneVision-1.5-4B SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-04/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-04/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-04/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-04/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-04/seed-5678/metrics.json"
+          }
+        ],
+        "Qwen2.5-VL-3B SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-05/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-05/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-05/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-05/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-05/seed-5678/metrics.json"
+          }
+        ],
+        "InternVL3.5-4B SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-06/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-06/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-06/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-06/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-06/seed-5678/metrics.json"
+          }
+        ],
+        "YOLOv8-X": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-07/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-07/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-07/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-07/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-07/seed-5678/metrics.json"
+          }
+        ],
+        "YOLOv11-X": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-08/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-08/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-08/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-08/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-08/seed-5678/metrics.json"
+          }
+        ],
+        "RT-DETR-L": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-09/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-09/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-09/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-09/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-09/seed-5678/metrics.json"
+          }
+        ],
+        "Faster R-CNN (R50-FPN)": [
+          {
+            "seed": 42,
+            "metrics": "../results/private/model-10/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/private/model-10/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/private/model-10/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/private/model-10/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/private/model-10/seed-5678/metrics.json"
+          }
+        ]
+      },
+      "reference_model": "Full RL-LHM",
+      "joint_statistics": "../results/private/paper-joint/joint_seed_statistics.json",
+      "classification_seed_decimals": {
+        "LLaVA-OneVision-1.5-4B SFT": 4,
+        "Qwen2.5-VL-3B SFT": 4,
+        "InternVL3.5-4B SFT": 4,
+        "Faster R-CNN (R50-FPN)": 4
+      },
+      "primary_protocol": "class_agnostic",
+      "primary_threshold": 0.5,
+      "threshold_order": [
+        0,
+        0.25,
+        0.5,
+        0.75
+      ],
+      "views": {
+        "overview": [
+          "SFT",
+          "vanilla GRPO",
+          "Full RL-LHM",
+          "LLaVA-OneVision-1.5-4B SFT",
+          "Qwen2.5-VL-3B SFT",
+          "InternVL3.5-4B SFT",
+          "YOLOv8-X",
+          "YOLOv11-X",
+          "RT-DETR-L",
+          "Faster R-CNN (R50-FPN)"
+        ],
+        "per_class": [
+          "SFT",
+          "vanilla GRPO",
+          "Full RL-LHM",
+          "LLaVA-OneVision-1.5-4B SFT",
+          "Qwen2.5-VL-3B SFT",
+          "InternVL3.5-4B SFT",
+          "YOLOv8-X",
+          "YOLOv11-X",
+          "RT-DETR-L",
+          "Faster R-CNN (R50-FPN)"
+        ],
+        "thresholds": [
+          "SFT",
+          "vanilla GRPO",
+          "Full RL-LHM",
+          "LLaVA-OneVision-1.5-4B SFT",
+          "Qwen2.5-VL-3B SFT",
+          "InternVL3.5-4B SFT",
+          "YOLOv8-X",
+          "YOLOv11-X",
+          "RT-DETR-L",
+          "Faster R-CNN (R50-FPN)"
+        ]
+      }
+    },
+    {
+      "id": "public",
+      "label": "Public cohort",
+      "classes": [
+        "HCC",
+        "ICC",
+        "HA_Hemangioma",
+        "BCLM",
+        "CRLM"
+      ],
+      "macro_classes": [
+        "HCC",
+        "ICC",
+        "HA_Hemangioma",
+        "BCLM",
+        "CRLM"
+      ],
+      "class_labels": {
+        "HCC": "HCC",
+        "ICC": "ICC",
+        "HA_Hemangioma": "HH",
+        "BCLM": "BCLM",
+        "CRLM": "CRLM"
+      },
+      "model_order": [
+        "SFT",
+        "vanilla GRPO",
+        "Full RL-LHM",
+        "LLaVA-OneVision-1.5-4B SFT",
+        "Qwen2.5-VL-3B SFT",
+        "InternVL3.5-4B SFT",
+        "YOLOv8-X",
+        "YOLOv11-X",
+        "RT-DETR-L",
+        "Faster R-CNN (R50-FPN)"
+      ],
+      "models": {
+        "SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-01/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-01/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-01/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-01/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-01/seed-5678/metrics.json"
+          }
+        ],
+        "vanilla GRPO": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-02/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-02/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-02/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-02/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-02/seed-5678/metrics.json"
+          }
+        ],
+        "Full RL-LHM": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-03/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-03/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-03/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-03/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-03/seed-5678/metrics.json"
+          }
+        ],
+        "LLaVA-OneVision-1.5-4B SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-04/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-04/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-04/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-04/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-04/seed-5678/metrics.json"
+          }
+        ],
+        "Qwen2.5-VL-3B SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-05/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-05/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-05/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-05/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-05/seed-5678/metrics.json"
+          }
+        ],
+        "InternVL3.5-4B SFT": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-06/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-06/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-06/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-06/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-06/seed-5678/metrics.json"
+          }
+        ],
+        "YOLOv8-X": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-07/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-07/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-07/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-07/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-07/seed-5678/metrics.json"
+          }
+        ],
+        "YOLOv11-X": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-08/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-08/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-08/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-08/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-08/seed-5678/metrics.json"
+          }
+        ],
+        "RT-DETR-L": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-09/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-09/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-09/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-09/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-09/seed-5678/metrics.json"
+          }
+        ],
+        "Faster R-CNN (R50-FPN)": [
+          {
+            "seed": 42,
+            "metrics": "../results/public/model-10/seed-42/metrics.json"
+          },
+          {
+            "seed": 2026,
+            "metrics": "../results/public/model-10/seed-2026/metrics.json"
+          },
+          {
+            "seed": 3407,
+            "metrics": "../results/public/model-10/seed-3407/metrics.json"
+          },
+          {
+            "seed": 1234,
+            "metrics": "../results/public/model-10/seed-1234/metrics.json"
+          },
+          {
+            "seed": 5678,
+            "metrics": "../results/public/model-10/seed-5678/metrics.json"
+          }
+        ]
+      },
+      "reference_model": "Full RL-LHM",
+      "joint_statistics": "../results/public/paper-joint/joint_seed_statistics.json",
+      "classification_seed_decimals": {
+        "LLaVA-OneVision-1.5-4B SFT": 4,
+        "Qwen2.5-VL-3B SFT": 4,
+        "InternVL3.5-4B SFT": 4,
+        "Faster R-CNN (R50-FPN)": 4
+      },
+      "primary_protocol": "class_agnostic",
+      "primary_threshold": 0.5,
+      "threshold_order": [
+        0,
+        0.25,
+        0.5,
+        0.75
+      ],
+      "views": {
+        "overview": [
+          "SFT",
+          "vanilla GRPO",
+          "Full RL-LHM",
+          "LLaVA-OneVision-1.5-4B SFT",
+          "Qwen2.5-VL-3B SFT",
+          "InternVL3.5-4B SFT",
+          "YOLOv8-X",
+          "YOLOv11-X",
+          "RT-DETR-L",
+          "Faster R-CNN (R50-FPN)"
+        ],
+        "per_class": [
+          "SFT",
+          "vanilla GRPO",
+          "Full RL-LHM",
+          "LLaVA-OneVision-1.5-4B SFT",
+          "Qwen2.5-VL-3B SFT",
+          "InternVL3.5-4B SFT",
+          "YOLOv8-X",
+          "YOLOv11-X",
+          "RT-DETR-L",
+          "Faster R-CNN (R50-FPN)"
+        ],
+        "thresholds": [
+          "SFT",
+          "vanilla GRPO",
+          "Full RL-LHM",
+          "LLaVA-OneVision-1.5-4B SFT",
+          "Qwen2.5-VL-3B SFT",
+          "InternVL3.5-4B SFT",
+          "YOLOv8-X",
+          "YOLOv11-X",
+          "RT-DETR-L",
+          "Faster R-CNN (R50-FPN)"
+        ]
+      }
+    }
+  ]
+}

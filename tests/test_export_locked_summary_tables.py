@@ -1,0 +1,248 @@
+"""Synthetic CPU checks for domain-safe locked summaries and TeX presentation."""
+import copy
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+from evaluation.export_locked_summary_tables import (
+    CLASSIFICATION_METRICS, MODEL_GROUPS, metric_cell, parse_locked_tex_summary,
+    range_cell, render_tables, validate_paired_family, classification_note, paired_group_summaries,
+)
+
+SEEDS = [42, 2026, 3407, 1234, 5678]
+
+
+def fixtures():
+    return [dict(record_type='paired_difference', cohort=cohort,
+                 model='Full RL-LHM', comparator=comparator, metric=metric,
+                 seed=str(seed), bh_q='0.2000', raw_p='0.0200',
+                 estimate='-0.0100', ci_lower='-0.1000', ci_upper='0.0800')
+            for cohort in ('private', 'public')
+            for comparator in ('SFT', 'vanilla GRPO')
+            for metric in ('accuracy', 'macro_recall', 'macro_f1')
+            for seed in SEEDS]
+
+
+def source_fixture():
+    rows = [dict(model=model, metrics={m: dict(mean=f'0.{5000 + i:04d}', sd='0.0100')
+                                      for m in CLASSIFICATION_METRICS})
+            for i, model in enumerate(model for _, models in MODEL_GROUPS for model in models)]
+    return dict(training_seeds=SEEDS, tables={
+        'classification_private': dict(metrics=list(CLASSIFICATION_METRICS), rows=rows),
+        'perclass_private': dict(metrics=['precision', 'recall', 'f1'], rows=[
+            dict(model='SFT', **{'class': 'HCC'}, test_patients=91,
+                 metrics={m: dict(mean='0.9106', sd='0.0742', seed_range=['0.8137', '1.0000'])
+                          for m in ('precision', 'recall', 'f1')})])})
+
+
+class LockedTableTests(unittest.TestCase):
+    def test_locked_precision_and_explicit_signed_difference(self):
+        self.assertEqual(metric_cell(dict(mean='0.6000', sd='0.0100')), r'0.6000$\,\pm\,$0.0100')
+        signed = dict(mean='-0.0100', sd='0.0300', seed_range=['-0.1000', '0.0800'])
+        self.assertIn('-0.0100', metric_cell(signed, True, domain='signed_difference'))
+        with self.assertRaises(ValueError):
+            metric_cell(signed)
+        self.assertEqual(signed['seed_range'], ['-0.1000', '0.0800'])
+
+    def test_tex_parser_separates_separator_from_sign(self):
+        metric = parse_locked_tex_summary(r'0.9106$\pm$0.0742 [0.8137--1.0000]')
+        self.assertEqual(metric['seed_range'], ['0.8137', '1.0000'])
+        self.assertEqual(metric['mean'], '0.9106')
+        negative = parse_locked_tex_summary(r'-0.0500$\pm$0.0300 [-0.1000---0.0200]',
+                                             domain='signed_difference')
+        self.assertEqual(negative['seed_range'], ['-0.1000', '-0.0200'])
+        self.assertNotIn('---', range_cell(negative, domain='signed_difference'))
+        with self.assertRaises(ValueError):
+            parse_locked_tex_summary(r'0.9106$\pm$0.0742 [0.8137---1.0000]')
+
+    def test_performance_boundaries_and_equal_range(self):
+        for value in ('0.0000', '1.0000'):
+            with self.subTest(value=value):
+                metric_cell(dict(mean=value, sd='0.0000', seed_range=[value, value]), True)
+        metric_cell(dict(mean='0.5000', sd='0.5000', seed_range=['0.0000', '1.0000']), True)
+
+    def test_invalid_bounds_negative_sd_and_reversed_order_rejected(self):
+        for low, high in (('-0.0001', '1.0000'), ('0.0000', '1.0001'),
+                          ('0.9000', '0.8000'), ('0.8137', '-1.0000')):
+            with self.subTest(bounds=(low, high)), self.assertRaises(ValueError):
+                metric_cell(dict(mean='0.8500', sd='0.0100', seed_range=[low, high]))
+        for value in ('NaN', 'Infinity', '0.1e2', 0.5):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                metric_cell(dict(mean=value, sd='0.0100'))
+        with self.assertRaises(ValueError):
+            metric_cell(dict(mean='0.5000', sd='-0.0100'))
+        with self.assertRaises(ValueError):
+            metric_cell(dict(mean='0.9000', sd='0.0100', seed_range=['0.5000', '0.8000']))
+
+    def test_q_threshold_and_no_input_mutation(self):
+        records = fixtures()
+        records[0]['bh_q'], records[1]['bh_q'] = '0.0499', '0.0500'
+        original = copy.deepcopy(records)
+        self.assertEqual(validate_paired_family(records, SEEDS), {'tests': 60, 'below_threshold': 1})
+        self.assertEqual(records, original)
+        self.assertEqual(records[0]['estimate'], '-0.0100')
+
+    def test_missing_duplicate_wrong_candidate_and_invalid_q_rejected(self):
+        for change in ('missing', 'duplicate', 'wrong_candidate', 'invalid_q', 'nan_q'):
+            records = fixtures()
+            if change == 'missing': records.pop(0)
+            if change == 'duplicate': records[0]['seed'] = records[1]['seed']
+            if change == 'wrong_candidate': records[0]['model'] = 'SFT'
+            if change == 'invalid_q': records[0]['bh_q'] = '1.0001'
+            if change == 'nan_q': records[0]['bh_q'] = 'NaN'
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_paired_family(records, SEEDS)
+
+    def test_group_order_four_metrics_and_no_significance_column(self):
+        source, records = source_fixture(), fixtures()
+        source['tables']['classification_private']['rows'].reverse()
+        before, records_before = copy.deepcopy(source), copy.deepcopy(records)
+        output = render_tables(source, records)
+        full, response = (output[n] for n in ('classification_private.tex', 'classification_private_response.tex'))
+        self.assertEqual(len([line for line in full.splitlines() if ' & ' in line]), 10)
+        self.assertEqual(len([line for line in response.splitlines() if ' & ' in line]), 3)
+        for line in full.splitlines():
+            if ' & ' in line: self.assertEqual(line.count(' & '), 4)
+        expected = [group for group, _ in MODEL_GROUPS]
+        self.assertEqual(sorted(expected, key=full.index), expected)
+        self.assertLess(full.index('SFT &'), full.index('vanilla GRPO &'))
+        self.assertLess(full.index('vanilla GRPO &'), full.index('RL-LHM (ours)'))
+        self.assertIn('Faster R-CNN (R50-FPN)', full)
+        self.assertNotIn('LLaVA', response)
+        for absent in ('0/5', '---', 'n.s.', 'Significant seeds', '0.0200'):
+            self.assertNotIn(absent, full)
+        self.assertEqual(source, before)
+        self.assertEqual(records, records_before)
+
+    def test_note_uses_only_correct_cohort_comparator_and_metric(self):
+        records = fixtures()
+        for row in records:
+            if row['cohort'] == 'private' and row['comparator'] == 'SFT' and row['metric'] == 'macro_f1':
+                row['bh_q'] = {42: '0.1000', 2026: '0.2000', 3407: '0.3000', 1234: '0.4000', 5678: '0.5000'}[int(row['seed'])]
+            elif row['cohort'] == 'public':
+                row['bh_q'] = '0.9000'
+        before = copy.deepcopy(records)
+        note = classification_note(records, SEEDS, 'private')
+        self.assertIn('Versus SFT, macro-F1: 0/5, 0/5, 5/5; $q$ 0.1000--0.5000.', note)
+        self.assertIn('Versus vanilla GRPO, macro-F1: 0/5, 0/5, 5/5; $q$ 0.2000--0.2000.', note)
+        self.assertNotIn('0.9000', note)
+        self.assertEqual(records, before)
+        zh = classification_note(records, SEEDS, 'private', language='zh')
+        self.assertIn('0.1000--0.5000', zh)
+        self.assertIn('Legacy per-seed', note)
+        self.assertIn('not joint five-seed tests', note)
+        self.assertIn('不是五seed联合检验', zh)
+        for forbidden in ('n.s.', 'Significant seeds'):
+            self.assertNotIn(forbidden, note)
+
+    def test_note_and_export_accept_all_three_threshold_outcomes(self):
+        for q, counts in (('0.0499', (5, 0, 0)), ('0.0500', (0, 5, 0)), ('0.0501', (0, 0, 5))):
+            records = fixtures()
+            for row in records:
+                row['bh_q'] = q
+            source = source_fixture()
+            source_before, records_before = copy.deepcopy(source), copy.deepcopy(records)
+            with self.subTest(q=q):
+                groups = paired_group_summaries(records, SEEDS, 'private')
+                self.assertEqual(len(groups), 6)
+                for group in groups:
+                    self.assertEqual(tuple(group[key] for key in
+                        ('below_threshold', 'equal_threshold', 'above_threshold')), counts)
+                    self.assertEqual((group['q_min'], group['q_max']), (q, q))
+                    self.assertEqual(group['tests'], 5)
+                output = render_tables(source, records)
+                self.assertIn(f'$q$ {q}--{q}', output['classification_private_note.tex'])
+                self.assertIn(', '.join(f'{n}/5' for n in counts), output['classification_private_note.tex'])
+                self.assertIn('、'.join(f'{n}/5' for n in counts), output['classification_private_note_zh.tex'])
+                self.assertEqual(records, records_before)
+                self.assertEqual(source, source_before)
+
+    def test_group_counts_do_not_mix_endpoints_or_cohorts_or_round_threshold(self):
+        records = fixtures()
+        q_values = ['0.00001', '0.04999', '0.05000', '0.05001', '1.00000']
+        selected = [row for row in records if row['cohort'] == 'private'
+                    and row['comparator'] == 'SFT' and row['metric'] == 'accuracy']
+        for row, q in zip(selected, q_values):
+            row['bh_q'] = q
+        original = copy.deepcopy(records)
+        private = paired_group_summaries(records, SEEDS, 'private')
+        public = paired_group_summaries(records, SEEDS, 'public')
+        self.assertEqual(private[0], dict(cohort='private', comparator='SFT', metric='accuracy', tests=5,
+            below_threshold=2, equal_threshold=1, above_threshold=2, q_min='0.00001', q_max='1.00000'))
+        self.assertTrue(all(row['below_threshold'] == row['equal_threshold'] == 0 and row['above_threshold'] == 5
+                            for row in private[1:] + public))
+        note = classification_note(records, SEEDS, 'private')
+        self.assertIn('Versus SFT, Accuracy: 2/5, 1/5, 2/5; $q$ 0.00001--1.00000.', note)
+        self.assertEqual(records, original)
+        # A narrow range straddling the threshold must remain distinguishable.
+        for row, q in zip(selected, ['0.04999', '0.04999', '0.05000', '0.05001', '0.05001']):
+            row['bh_q'] = q
+        self.assertIn('$q$ 0.04999--0.05001', classification_note(records, SEEDS, 'private'))
+        self.assertEqual([row['raw_p'] for row in records], [row['raw_p'] for row in original])
+        self.assertEqual([row['bh_q'] for row in original[:5]], q_values)
+
+    def test_note_refuses_identity_mismatch_and_unknown_cohort_or_language(self):
+        records = fixtures()
+        records[0]['seed'] = records[1]['seed']
+        with self.assertRaises(ValueError):
+            classification_note(records, SEEDS, 'private')
+        with self.assertRaises(ValueError):
+            classification_note(fixtures(), SEEDS, 'unknown')
+        with self.assertRaises(ValueError):
+            classification_note(fixtures(), SEEDS, 'private', language='unknown')
+        for seeds in (SEEDS[:-1], [42, '42', 2026, 3407, 1234]):
+            with self.subTest(seeds=seeds), self.assertRaises(ValueError):
+                validate_paired_family(fixtures(), seeds)
+
+    def test_missing_extra_or_duplicate_model_not_silently_dropped(self):
+        for change in ('missing', 'extra', 'duplicate'):
+            source = source_fixture()
+            rows = source['tables']['classification_private']['rows']
+            if change == 'missing': rows.pop()
+            if change == 'extra': rows.append(dict(model='Unspecified model', metrics=rows[0]['metrics']))
+            if change == 'duplicate': rows[-1] = copy.deepcopy(rows[0])
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                render_tables(source, fixtures())
+
+    def test_class_mean_sd_and_counts_with_ranges_preserved_separately(self):
+        source = source_fixture()
+        before = copy.deepcopy(source)
+        outputs = render_tables(source, fixtures())
+        main = outputs['perclass_private.tex']
+        self.assertIn('HCC & 91 & 0.9106', main)
+        self.assertNotIn('0.8137', main)
+        self.assertNotIn('perclass_seed_ranges.tex', outputs)
+        self.assertEqual(source, before)  # Locked ranges remain in the source JSON.
+        source['tables']['perclass_private']['rows'][0]['metrics']['f1']['seed_range'][1] = '-1.0000'
+        with self.assertRaises(ValueError):
+            render_tables(source, fixtures())  # Invalid hidden ranges cannot pass.
+
+    @unittest.skipUnless(shutil.which('pdflatex'), 'TeX engine unavailable')
+    def test_tex_rendering_of_grouped_tables_and_signed_ranges(self):
+        outputs = render_tables(source_fixture(), fixtures())
+        signed = metric_cell(dict(mean='-0.0500', sd='0.0300',
+                                  seed_range=['-0.1000', '-0.0200']),
+                             True, domain='signed_difference')
+        tex = (r'\documentclass{article}\usepackage[margin=15mm]{geometry}'
+               r'\usepackage{booktabs,amsmath,array}\begin{document}\small'
+               r'\begin{tabular}{@{}p{5.2cm}cccc@{}}\toprule '
+               r'Model & Accuracy & Precision & Recall & F1 \\\midrule ' +
+               outputs['classification_private.tex'] + r'\bottomrule\end{tabular}\par\bigskip ' +
+               outputs['classification_private_note.tex'] + r'\par\bigskip ' +
+               r'\begin{tabular}{l}'+signed+r'\\\end{tabular}\end{document}')
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path/'render.tex').write_text(tex)
+            run = subprocess.run(['pdflatex', '-interaction=nonstopmode', '-halt-on-error',
+                                  'render.tex'], cwd=path, capture_output=True, text=True, timeout=45)
+            self.assertEqual(run.returncode, 0, run.stdout[-4000:])
+            self.assertGreater((path/'render.pdf').stat().st_size, 1000)
+            log = (path/'render.log').read_text(errors='replace')
+            self.assertNotIn('Overfull \\hbox', log)
+            self.assertNotIn('Extra alignment tab', log)
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -1,0 +1,10 @@
+{
+  "prediction_root": "${RL_LHM_LOCO_PREDICTION_ROOT}",
+  "output_dir": "${RL_LHM_LOCO_OUTPUT_DIR}",
+  "direction": "${SOURCE_CENTER_ID}_to_${TARGET_CENTER_ID}",
+  "seeds": [42, 1234, 2026, 3407, 5678],
+  "target_supported_classes": ["HCC", "ICC", "HA_Hemangioma", "nodule_CYST"],
+  "target_absent_class": "FNH",
+  "bootstrap_repeats": 10000,
+  "bootstrap_seed": 2026
+}

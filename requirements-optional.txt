@@ -1,0 +1,10 @@
+# Optional model inference, plotting, and external RL-runtime adapters.
+torch>=2.1
+transformers==4.57.1
+Pillow>=10
+matplotlib>=3.8
+tqdm>=4.66
+qwen-vl-utils>=0.0.10
+omegaconf>=2.3
+# VeRL source: fc3a5acae155425909bc30c982c3cea0784ce3c2 with the three
+# RL-LHM integration patches. See docs/training_pipeline.md for setup.

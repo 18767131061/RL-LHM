@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the RL-LHM paper."
+title: "RL-LHM: Reinforcement Learning for Liver Lesion Understanding"
+type: software
+license: MIT
+abstract: "Reference implementation and evaluation code for the RL-LHM paper."
+version: 1.0.0
+date-released: 2026-09-25
+authors:
+  - family-names: "Chen"
+    given-names: "Pengjie"
+repository-code: "https://github.com/18767131061/RL-LHM"

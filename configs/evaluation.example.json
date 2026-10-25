@@ -1,0 +1,21 @@
+{
+  "manifest": "${RL_LHM_EVALUATION_MANIFEST_JSON}",
+  "predictions": "${RL_LHM_CANONICAL_PREDICTIONS_JSONL}",
+  "output_dir": "${RL_LHM_OUTPUT_DIR}",
+  "model_name": "Full",
+  "model_seed": 2026,
+  "iou_thresholds": [
+    0.0,
+    0.25,
+    0.5,
+    0.55,
+    0.6,
+    0.65,
+    0.7,
+    0.75,
+    0.8,
+    0.85,
+    0.9,
+    0.95
+  ]
+}
