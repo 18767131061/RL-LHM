@@ -3,7 +3,7 @@ message: "If you use this software, please cite the RL-LHM paper."
 title: "Risk-aware lesion-grounded reinforcement learning for structured vision–language diagnosis of liver lesions in multi-phase CT"
 type: software
 license: MIT
-abstract: "Core algorithm implementation for the RL-LHM paper."
+abstract: "RL-LHM algorithms with supervised training, reinforcement learning, visual feature extraction, inference, and evaluation."
 authors:
   - family-names: "Chen"
     given-names: "Pengjie"
