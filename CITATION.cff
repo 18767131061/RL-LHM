@@ -1,11 +1,9 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite the RL-LHM paper."
-title: "RL-LHM: Reinforcement Learning for Liver Lesion Understanding"
+title: "Risk-aware lesion-grounded reinforcement learning for structured vision–language diagnosis of liver lesions in multi-phase CT"
 type: software
 license: MIT
-abstract: "Reference implementation and evaluation code for the RL-LHM paper."
-version: 1.0.0
-date-released: 2026-09-25
+abstract: "Core algorithm implementation for the RL-LHM paper."
 authors:
   - family-names: "Chen"
     given-names: "Pengjie"

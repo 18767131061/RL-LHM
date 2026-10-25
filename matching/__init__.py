@@ -1,22 +1,14 @@
-"""Geometry and lesion-matching protocols used by RL-LHM evaluation."""
+"""Geometry primitives for the core RARS assignments."""
 
-from .geometry import Assignment, box_iou, box_iou_matrix, hungarian_assignment
-from .protocols import (
-    CLASS_AGNOSTIC,
-    GEOMETRY_FIRST_CLASS_AWARE,
-    SAME_CLASS_PRIORITY,
-    ProtocolMatch,
-    match_protocol,
+from .geometry import (
+    Assignment,
+    box_iou,
+    box_iou_matrix,
+    generalized_box_iou,
+    hungarian_assignment,
 )
 
 __all__ = [
-    "Assignment",
-    "CLASS_AGNOSTIC",
-    "GEOMETRY_FIRST_CLASS_AWARE",
-    "ProtocolMatch",
-    "SAME_CLASS_PRIORITY",
-    "box_iou",
-    "box_iou_matrix",
+    "Assignment", "box_iou", "box_iou_matrix", "generalized_box_iou",
     "hungarian_assignment",
-    "match_protocol",
 ]

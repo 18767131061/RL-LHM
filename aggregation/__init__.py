@@ -1,5 +1,4 @@
-"""Patient-level aggregation strategies."""
+"""Deterministic diagnostic aggregation."""
+from .patient import AggregationResult, VoteRecord, aggregate_patient, group_prediction
 
-from .patient import AggregationResult, VoteRecord, aggregate_patient, aggregate_patient_rows
-
-__all__ = ["AggregationResult", "VoteRecord", "aggregate_patient", "aggregate_patient_rows"]
+__all__ = ["AggregationResult", "VoteRecord", "aggregate_patient", "group_prediction"]

@@ -1,97 +1,62 @@
-"""Public RL-LHM detection/classification reward orchestration."""
+"""Structured RARS reward: independent IoU/GIoU matching, then clipping."""
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from types import MappingProxyType
 
 import numpy as np
-from scipy.optimize import linear_sum_assignment
 
-from evaluation.schema import Detection, ParsedCompletion, SchemaError, parse_completion
-from matching.geometry import box_iou
-from rewards.rars import (
-    PRIVATE_CLASSES,
-    PUBLIC_CLASSES,
+from matching.geometry import box_iou, generalized_box_iou, hungarian_assignment
+from .schema import Detection, PHASES, ParsedCompletion, SchemaError, parse_completion
+from .rars import (
     RARSParameters,
     build_rars_confusion_cost,
-    default_matrix,
-    matrix_from_pair_weights,
-    profile_class_space,
+    completion_likelihood,
+    normalize_class_counts,
+    validate_risk_matrix,
 )
-
-PHASES = ("a", "p", "v")
 
 
 @dataclass(frozen=True)
 class RewardConfig:
-    data_mode: str = "public_5class"
-    reward_mode: str = "rars"
-    matrix_mode: str = "ordinal"
-    matrix_scale: float = 1.0
-    giou_for_classification: float = 0.30
-    classification_weight: float = 1.0
-    clip_min: float = -6.0
-    clip_max: float = 3.0
-    rars_parameters: RARSParameters = RARSParameters()
-    risk_profile: Mapping[str, object] | None = None
+    classes: tuple[str, ...]
+    severity_matrix: Mapping[str, Mapping[str, float]]
+    rars_parameters: RARSParameters
+    giou_for_classification: float
+    detection_weight: float
+    classification_weight: float
+    missing_match_penalty: float
+    clip_min: float
+    clip_max: float
+    rars_enabled: bool
 
-
-def class_space(data_mode: str) -> tuple[str, ...]:
-    if data_mode == "private_5class":
-        return PRIVATE_CLASSES
-    if data_mode == "public_3class":
-        return ("HCC", "ICC", "HA_Hemangioma")
-    if data_mode == "public_5class":
-        return PUBLIC_CLASSES
-    raise ValueError(f"Unsupported data mode: {data_mode}")
-
-
-def _profile_settings(config: RewardConfig):
-    classes = class_space(config.data_mode)
-    cohort = "private" if config.data_mode == "private_5class" else "public"
-    if config.risk_profile is None:
-        return classes, default_matrix(cohort)
-    try:
-        classes = profile_class_space(config.risk_profile, cohort, classes)
-        weights = {pair.replace("--", "->"): value
-                   for pair, value in config.risk_profile["pair_weights"].items()}
-        return classes, matrix_from_pair_weights(classes, weights, config.risk_profile["other_weight"])
-    except (KeyError, TypeError, ValueError) as error:
-        raise RuntimeError(f"Invalid reward risk profile: {error}") from error
-
-
-def _empty_reward(sequence_confidence: float, config: RewardConfig) -> dict[str, object]:
-    return {
-        "score": 0.0,
-        "reward_raw": 0.0,
-        "parse_ok": 0,
-        "detection_reward": 0.0,
-        "classification_reward": 0.0,
-        "classification_matches": 0,
-        "sequence_confidence": float(sequence_confidence),
-        "reward_mode": config.reward_mode,
-        "risk_matrix_mode": config.matrix_mode,
-        "risk_matrix_scale": config.matrix_scale,
-        "severity_factor_max": 1.0,
-        "background_correct_phases": 0,
-        "background_total_phases": 0,
-    }
-
-
-def generalized_box_iou(first: Sequence[float], second: Sequence[float]) -> float:
-    """Continuous-coordinate generalized IoU for two ordered xyxy boxes."""
-    iou = box_iou(first, second)
-    ax1, ay1, ax2, ay2 = (float(value) for value in first)
-    bx1, by1, bx2, by2 = (float(value) for value in second)
-    first_area = (ax2 - ax1) * (ay2 - ay1)
-    second_area = (bx2 - bx1) * (by2 - by1)
-    intersection = iou * (first_area + second_area) / (1.0 + iou) if iou < 1.0 else first_area
-    union = first_area + second_area - intersection
-    cover = (max(ax2, bx2) - min(ax1, bx1)) * (max(ay2, by2) - min(ay1, by1))
-    return float(iou - (cover - union) / cover) if cover > 0.0 else float(iou)
+    def __post_init__(self) -> None:
+        if not isinstance(self.rars_parameters, RARSParameters):
+            raise TypeError("rars_parameters must be explicit RARSParameters")
+        classes = tuple(self.classes)
+        if (not classes or len(classes) != len(set(classes))
+                or any(not isinstance(label, str) or not label for label in classes)):
+            raise ValueError("classes must be non-empty, unique diagnostic labels")
+        validate_risk_matrix(self.severity_matrix, classes)
+        object.__setattr__(self, "classes", classes)
+        object.__setattr__(self, "severity_matrix", MappingProxyType({
+            label: MappingProxyType(dict(self.severity_matrix[label])) for label in classes
+        }))
+        if (not math.isfinite(self.giou_for_classification)
+                or not -1 <= self.giou_for_classification <= 1):
+            raise ValueError("giou_for_classification must be finite and in [-1,1]")
+        for name in ("detection_weight", "classification_weight", "missing_match_penalty"):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"{name} must be finite and non-negative")
+        if (not math.isfinite(self.clip_min) or not math.isfinite(self.clip_max)
+                or not self.clip_min <= 0 <= self.clip_max or self.clip_min >= self.clip_max):
+            raise ValueError("Reward bounds must be finite, have positive width, and include invalid-output zero")
+        if not isinstance(self.rars_enabled, bool):
+            raise ValueError("rars_enabled must be a boolean")
 
 
 def _phase_assignment(
@@ -100,60 +65,36 @@ def _phase_assignment(
     *,
     use_giou: bool,
 ) -> list[tuple[Detection, Detection, float]]:
-    if not ground_truth or not predictions:
-        return []
     similarity = generalized_box_iou if use_giou else box_iou
-    matrix = np.asarray(
-        [[similarity(gt.box, prediction.box) for prediction in predictions] for gt in ground_truth],
-        dtype=float,
-    )
-    rows, columns = linear_sum_assignment(-matrix)
+    matrix = np.asarray([
+        [similarity(gt.box, prediction.box) for prediction in predictions]
+        for gt in ground_truth
+    ], dtype=float).reshape(len(ground_truth), len(predictions))
     return [
-        (ground_truth[int(row)], predictions[int(column)], float(matrix[row, column]))
-        for row, column in zip(rows, columns)
+        (ground_truth[pair.gt_index], predictions[pair.prediction_index], pair.similarity)
+        for pair in hungarian_assignment(matrix)
+        if pair.gt_index is not None and pair.prediction_index is not None
     ]
 
 
-def _all_phase_assignments(
-    ground_truth: Sequence[Detection],
-    predictions: Sequence[Detection],
-    *,
-    use_giou: bool,
-) -> list[tuple[Detection, Detection, float]]:
-    matches: list[tuple[Detection, Detection, float]] = []
-    for phase in PHASES:
-        matches.extend(
-            _phase_assignment(
-                [item for item in ground_truth if item.phase == phase],
-                [item for item in predictions if item.phase == phase],
-                use_giou=use_giou,
-            )
-        )
-    return matches
-
-
 def detection_reward(
-    ground_truth: ParsedCompletion,
-    prediction: ParsedCompletion,
+    ground_truth: ParsedCompletion, prediction: ParsedCompletion
 ) -> tuple[float, dict[str, float], int]:
-    """Return the reward-side phase mean IoU with missed GT lesions set to zero."""
-    predicted_background = set(prediction.background_phases)
-    ground_truth_background = set(ground_truth.background_phases)
-    phase_scores: dict[str, float] = {}
+    """Phase-mean IoU; unmatched ground truths and absent phases get zero."""
+    phase_scores = {}
     background_correct = 0
     for phase in PHASES:
-        phase_gt = [item for item in ground_truth.detections if item.phase == phase]
-        phase_prediction = [item for item in prediction.detections if item.phase == phase]
-        if phase_gt:
-            matches = _phase_assignment(phase_gt, phase_prediction, use_giou=False)
-            phase_score = sum(score for _, _, score in matches) / len(phase_gt)
-        elif phase in ground_truth_background:
-            phase_score = float(phase in predicted_background and not phase_prediction)
-            background_correct += int(phase_score)
+        truth = [item for item in ground_truth.detections if item.phase == phase]
+        predicted = [item for item in prediction.detections if item.phase == phase]
+        if truth:
+            pairs = _phase_assignment(truth, predicted, use_giou=False)
+            score = sum(similarity for _, _, similarity in pairs) / len(truth)
         else:
-            phase_score = 0.0
-        phase_scores[phase] = float(phase_score)
-    return float(sum(phase_scores.values()) / len(PHASES)), phase_scores, background_correct
+            score = float(phase in ground_truth.background_phases
+                          and phase in prediction.background_phases and not predicted)
+            background_correct += int(score)
+        phase_scores[phase] = float(score)
+    return sum(phase_scores.values()) / len(PHASES), phase_scores, background_correct
 
 
 def classification_reward(
@@ -164,119 +105,81 @@ def classification_reward(
     class_counts: Mapping[str, int],
     config: RewardConfig,
 ) -> tuple[float, int, float]:
-    classes, matrix = _profile_settings(config)
-    normalized_counts = dict(class_counts)
-    normalized_counts.update({label: max(1, int(class_counts.get(label, 1))) for label in classes})
-    reward = 0.0
-    eligible = 0
-    maximum_severity_factor = 1.0
-    for truth, predicted, giou in _all_phase_assignments(
-        ground_truth.detections,
-        prediction.detections,
-        use_giou=True,
-    ):
-        if giou < config.giou_for_classification:
-            continue
-        eligible += 1
-        if predicted.label == truth.label:
-            reward += 1.0
-            continue
-        penalty, severity_factor = build_rars_confusion_cost(
-            predicted.label,
-            truth.label,
-            sequence_confidence,
-            normalized_counts,
-            matrix,
-            parameters=config.rars_parameters,
-            reward_mode=config.reward_mode,
-            matrix_mode=config.matrix_mode,
-            matrix_scale=config.matrix_scale,
+    """Mean agreement/cost over GIoU-assigned pairs passing the threshold."""
+    counts = normalize_class_counts(class_counts, config.classes)
+    if not math.isfinite(sequence_confidence) or not 0 <= sequence_confidence <= 1:
+        raise ValueError("sequence_confidence must be a finite likelihood in [0,1]")
+    contributions = []
+    maximum_severity = 1.0
+    for phase in PHASES:
+        pairs = _phase_assignment(
+            [item for item in ground_truth.detections if item.phase == phase],
+            [item for item in prediction.detections if item.phase == phase],
+            use_giou=True,
         )
-        reward -= penalty
-        maximum_severity_factor = max(maximum_severity_factor, severity_factor)
-    return (float(reward / eligible) if eligible else 0.0, eligible, maximum_severity_factor)
-
-
-def _parse_ground_truth(payload: str | Mapping[str, object], classes: Sequence[str]) -> ParsedCompletion:
-    try:
-        source = json.loads(payload) if isinstance(payload, str) else dict(payload)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise SchemaError("Ground truth is not a valid object") from error
-    if "gt_dets" in source:
-        detections = []
-        for item in source.get("gt_dets", []) or []:
-            converted = dict(item)
-            if "bbox_2d" not in converted and "bbox" in converted:
-                converted["bbox_2d"] = converted.pop("bbox")
-            detections.append(converted)
-        source = {
-            "detections": detections + [
-                {"phase": phase, "label": "background", "bbox_2d": [-1, -1, -1, -1]}
-                for phase in source.get("background_phases", []) or []
-            ]
-        }
-    return parse_completion(json.dumps(source), classes)
+        for truth, predicted, giou in pairs:
+            if giou < config.giou_for_classification:
+                continue
+            if predicted.label == truth.label:
+                contributions.append(1.0)
+            elif config.rars_enabled:
+                penalty, severity = build_rars_confusion_cost(
+                    predicted.label, truth.label, sequence_confidence, counts,
+                    config.severity_matrix, config.rars_parameters,
+                )
+                contributions.append(-penalty)
+                maximum_severity = max(maximum_severity, severity)
+            else:
+                contributions.append(-1.0)
+    eligible = len(contributions)
+    # Divide before accumulation: the mean can be finite even when its sum
+    # would overflow for large caller-supplied severity weights.
+    mean = math.fsum(value / eligible for value in contributions) if eligible else 0.0
+    return mean, eligible, maximum_severity
 
 
 def compute_score(
     solution: str,
-    ground_truth: str | Mapping[str, object],
+    ground_truth: str,
     *,
-    extra_info: Mapping[str, object] | str | None = None,
-    config: RewardConfig = RewardConfig(),
+    completion_nll: float,
+    class_counts: Mapping[str, int],
+    config: RewardConfig,
+    aliases: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Compute the deployed reward contract without environment-specific state."""
-    if isinstance(extra_info, str):
-        try:
-            extra_info = json.loads(extra_info)
-        except json.JSONDecodeError:
-            extra_info = {}
-    metadata = dict(extra_info or {})
-    sequence_confidence = float(metadata.get("sequence_confidence", metadata.get("seq_confidence", 0.0)))
-    if not math.isfinite(sequence_confidence):
-        sequence_confidence = 0.0
-    empty = _empty_reward(sequence_confidence, config)
+    """Score JSON with the same explicit schema for prediction and ground truth.
+
+    Only malformed model output receives a zero reward. Invalid ground truth
+    or caller metadata raises an error. NLL is the mean over generated tokens,
+    excluding prompts and padding. ``missing_match_penalty`` is a magnitude.
+    """
+    confidence = completion_likelihood(completion_nll)
+    counts = normalize_class_counts(class_counts, config.classes)
+    truth = parse_completion(ground_truth, config.classes, aliases)
+    result = {
+        "score": 0.0, "reward_raw": 0.0, "parse_ok": False,
+        "detection_reward": 0.0, "classification_reward": 0.0,
+        "classification_matches": 0, "sequence_confidence": confidence,
+        "phase_scores": {phase: 0.0 for phase in PHASES},
+        "missing_match_reward": 0.0, "severity_factor_max": 1.0,
+        "background_correct_phases": 0,
+    }
     try:
-        if config.reward_mode not in {"vanilla", "rars"}:
-            raise ValueError(f"Unsupported reward mode: {config.reward_mode}")
-        if config.matrix_mode not in {"ordinal", "uniform", "zero"}:
-            raise ValueError(f"Unsupported risk matrix mode: {config.matrix_mode}")
-        if not math.isfinite(config.matrix_scale) or config.matrix_scale < 0.0:
-            raise ValueError("risk matrix scale must be finite and non-negative")
-        classes, _ = _profile_settings(config)
-        truth = _parse_ground_truth(ground_truth, classes)
-        predicted = parse_completion(solution, classes)
-        detection, phase_scores, background_correct = detection_reward(truth, predicted)
-        classification, classification_matches, severity_factor = classification_reward(
-            truth,
-            predicted,
-            sequence_confidence=sequence_confidence,
-            class_counts=metadata.get("class_counts", {}),
-            config=config,
-        )
-        raw = detection
-        if classification_matches:
-            raw += config.classification_weight * classification
-        elif not background_correct:
-            raw -= 0.1
-        score = max(config.clip_min, min(config.clip_max, raw))
-        return {
-            "score": float(score),
-            "reward_raw": float(raw),
-            "parse_ok": 1,
-            "detection_reward": float(detection),
-            "phase_a_iou": phase_scores["a"],
-            "phase_p_iou": phase_scores["p"],
-            "phase_v_iou": phase_scores["v"],
-            "classification_reward": float(classification),
-            "classification_matches": int(classification_matches),
-            "sequence_confidence": sequence_confidence,
-            "reward_mode": config.reward_mode,
-            "risk_matrix_mode": config.matrix_mode,
-            "risk_matrix_scale": config.matrix_scale,
-            "severity_factor_max": float(severity_factor),
-            "background_correct_phases": int(background_correct),
-            "background_total_phases": len(truth.background_phases),
-        }
-    except (SchemaError, KeyError, TypeError, IndexError, ValueError):
-        return empty
+        predicted = parse_completion(solution, config.classes, aliases)
+    except SchemaError:
+        return result
+    detection, phase_scores, background_correct = detection_reward(truth, predicted)
+    classification, matches, severity = classification_reward(
+        truth, predicted, sequence_confidence=confidence, class_counts=counts, config=config
+    )
+    missing = -config.missing_match_penalty if not matches and not background_correct else 0.0
+    raw = config.detection_weight * detection + config.classification_weight * classification + missing
+    result.update({
+        "score": max(config.clip_min, min(config.clip_max, raw)),
+        "reward_raw": raw, "parse_ok": True,
+        "detection_reward": detection, "classification_reward": classification,
+        "classification_matches": matches, "phase_scores": phase_scores,
+        "missing_match_reward": missing, "severity_factor_max": severity,
+        "background_correct_phases": background_correct,
+    })
+    return result

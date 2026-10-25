@@ -1,5 +1,3 @@
 numpy>=1.24,<3
 scipy>=1.10,<2
-pytest>=8,<10
-
-# Install requirements-optional.txt for model loading, generation, RL, and plotting.
+torch>=2.1

@@ -1,4 +1,4 @@
-"""IoU and deterministic one-to-one Hungarian assignment utilities."""
+"""Continuous box overlaps and one-to-one maximum-similarity assignment."""
 
 from __future__ import annotations
 
@@ -28,18 +28,35 @@ def _validated_box(box: Sequence[float]) -> tuple[float, float, float, float]:
     return x1, y1, x2, y2
 
 
-def box_iou(first: Sequence[float], second: Sequence[float]) -> float:
-    """Return continuous-coordinate 2D IoU for two xyxy boxes."""
-
+def _overlap_areas(first: Sequence[float], second: Sequence[float]) -> tuple[float, float, float]:
+    """Scale both boxes per axis to avoid overflow/underflow in their areas."""
     ax1, ay1, ax2, ay2 = _validated_box(first)
     bx1, by1, bx2, by2 = _validated_box(second)
+    x_scale = max(abs(ax1), abs(ax2), abs(bx1), abs(bx2)) or 1.0
+    y_scale = max(abs(ay1), abs(ay2), abs(by1), abs(by2)) or 1.0
+    ax1, ax2, bx1, bx2 = (value / x_scale for value in (ax1, ax2, bx1, bx2))
+    ay1, ay2, by1, by2 = (value / y_scale for value in (ay1, ay2, by1, by2))
     intersection_width = max(0.0, min(ax2, bx2) - max(ax1, bx1))
     intersection_height = max(0.0, min(ay2, by2) - max(ay1, by1))
     intersection = intersection_width * intersection_height
     first_area = (ax2 - ax1) * (ay2 - ay1)
     second_area = (bx2 - bx1) * (by2 - by1)
     union = first_area + second_area - intersection
+    enclosure = (max(ax2, bx2) - min(ax1, bx1)) * (max(ay2, by2) - min(ay1, by1))
+    return intersection, union, enclosure
+
+
+def box_iou(first: Sequence[float], second: Sequence[float]) -> float:
+    """Return continuous-coordinate 2D IoU for two xyxy boxes."""
+    intersection, union, _ = _overlap_areas(first, second)
     return intersection / union if union > 0.0 else 0.0
+
+
+def generalized_box_iou(first: Sequence[float], second: Sequence[float]) -> float:
+    """Return IoU - (enclosing rectangle area - union) / enclosing area."""
+    intersection, union, enclosure = _overlap_areas(first, second)
+    iou = intersection / union if union > 0 else 0.0
+    return iou - (enclosure - union) / enclosure if enclosure > 0 else iou
 
 
 def box_iou_matrix(
