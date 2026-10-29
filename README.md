@@ -57,3 +57,27 @@ torchrun --standalone --nproc_per_node=4 -m tests.zero2_smoke --output /tmp/rl-l
 ```
 
 Code is distributed under the MIT License.
+
+## Evaluation and controlled analyses
+
+Manifests declare `output_classes` for parsing/voting and `metric_classes` for the fixed macro average. For WMU→ZJU, keep all five output labels and set the macro classes to HCC, ICC, HA_Hemangioma and nodule_CYST. FNH outputs remain valid predictions and count as errors. `configs/evaluation_loco.json` provides this evaluation setup.
+
+Check target capacity using the actual chat template and tokenizer before training:
+
+```sh
+python -m data.check_lengths --config configs/sft_4xa800.json --output target_lengths.json
+python -m evaluation.evaluate --config configs/evaluation_loco.json
+```
+
+Training also runs this preflight and rejects GT targets exceeding the completion budget. Predictions record EOS versus length-limit termination, token counts and phase sources. Evaluations report truncation by class and lesion count. Both maximum-total-IoU and threshold-aware detection results are emitted under separate names; `--matching-method` selects the primary metrics.
+
+For center-stratified results, fixed-class patient bootstrap intervals and paired comparisons:
+
+```sh
+python -m evaluation.analyze --manifest datasets/test.json \
+  --metrics metrics/test/metrics.json --compare metrics/baseline/metrics.json \
+  --split-manifest train=datasets/train.json --split-manifest test=datasets/test.json \
+  --bootstrap-samples 2000 --seed 42 --output metrics/analysis.json
+```
+
+Add `patient_centers` to manifests for center×class tables and per-center metrics. `configs/inference_repeat_a.json` repeats the arterial image in all three input slots while preserving patients, prompts and original evaluation targets. Generate and evaluate it alongside `configs/inference.json`, then use the paired comparison command to measure the effect of this input intervention. Use the same model and decoding settings in both configurations.

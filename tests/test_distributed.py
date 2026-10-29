@@ -43,7 +43,8 @@ class TinyBackend:
         inputs["target"] = torch.tensor(member)
         mask = torch.ones(1, tokens, dtype=torch.bool)
         rollout = SimpleNamespace(texts=[completion(triplet("ICC" if member else "HCC"))],
-                                  model_inputs=inputs, response_mask=mask, completion_nlls=[1.0])
+                                  model_inputs=inputs, response_mask=mask, completion_nlls=[1.0],
+                                  finish_reasons=["eos"], completion_token_counts=[tokens])
         rollout.old_log_probabilities = self.log_probabilities(rollout).detach()
         return rollout
 
@@ -61,6 +62,8 @@ def objects(distributed=False):
     runtime = Runtime(backend.model, torch.optim.AdamW(backend.model.parameters(), lr=1e-3))
     generator = torch.Generator().manual_seed(3)
     state = memory()
+    state.dead_code_idle_updates = 3
+    state.dead_code_replace_probability = 1
     vectors = [torch.eye(3)[i % 3] for i in range(7)]
     sampling = torch.Generator().manual_seed(5)
     sampler = VGSSampler(state, vectors, generator=sampling, use_vgs=True, epoch_count=0,
@@ -97,6 +100,8 @@ def worker(rank, world, rendezvous, output, stage):
         full = deepcopy(obj[0].model.state_dict())
         baseline = dict(obj[4].entries)
         embedding = obj[3].state.embedding.clone()
+        activity = dict(last_seen=obj[3].state.last_seen.clone(), visit_count=obj[3].state.visit_count.clone(),
+                        update_step=obj[3].state.update_step, revival_count=obj[3].state.revival_count)
         # Save after one epoch, then initialize new model/optimizer and resume.
         obj = objects(world > 1)
         def save(epoch, metrics):
@@ -114,10 +119,18 @@ def worker(rank, world, rendezvous, output, stage):
             torch.testing.assert_close(value, restored[0].model.state_dict()[name], rtol=1e-12, atol=1e-12)
         assert baseline == restored[4].entries
         torch.testing.assert_close(embedding, restored[3].state.embedding, rtol=0, atol=0)
+        for key, value in activity.items():
+            current = getattr(restored[3].state, key)
+            if isinstance(value, torch.Tensor):
+                assert torch.equal(value, current)
+            else:
+                assert value == current
+        rank_activity = obj[2].gather({k: v.tolist() if isinstance(v, torch.Tensor) else v for k, v in activity.items()})
+        assert all(item == rank_activity[0] for item in rank_activity)
         all_baselines = obj[2].gather(baseline)
         assert all(value == baseline for value in all_baselines)
         if rank == 0:
-            torch.save(dict(weights=full, baseline=baseline, embedding=embedding, history=history),
+            torch.save(dict(weights=full, baseline=baseline, embedding=embedding, activity=activity, history=history),
                        Path(output) / f"{stage}_{world}.pt")
     finally:
         if world > 1:
@@ -134,6 +147,11 @@ def test_four_rank_equivalence_and_resume(tmp_path, stage):
         torch.testing.assert_close(one["weights"][key], four["weights"][key], rtol=1e-10, atol=1e-10)
     assert one["baseline"] == four["baseline"]
     torch.testing.assert_close(one["embedding"], four["embedding"], rtol=0, atol=0)
+    for key, value in one["activity"].items():
+        if isinstance(value, torch.Tensor):
+            assert torch.equal(value, four["activity"][key])
+        else:
+            assert value == four["activity"][key]
     for first, second in zip(one["history"], four["history"]):
         assert first.keys() == second.keys()
         for key in first:

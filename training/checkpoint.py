@@ -5,6 +5,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
+from data.provenance import source_revision
 
 import numpy as np
 import torch
@@ -61,7 +62,8 @@ def capture_state(generators, baseline_store, curriculum_sampler):
         memory = curriculum_sampler.state
         state["curriculum"] = {
             **{name: getattr(memory, name).clone() for name in
-               ("embedding", "ema_cluster_size", "ema_weight", "reward_ema", "reward_seen")},
+               ("embedding", "ema_cluster_size", "ema_weight", "reward_ema", "reward_seen", "last_seen", "visit_count")},
+            "update_step": memory.update_step, "revival_count": memory.revival_count,
             "filled_slots": memory.filled_slots, "is_initialized": memory.is_initialized,
             "epoch_count": curriculum_sampler.epoch_count,
             "replacement": curriculum_sampler.replacement,
@@ -84,10 +86,12 @@ def restore_state(state, generators, baseline_store, curriculum_sampler):
         memory, saved = curriculum_sampler.state, state["curriculum"]
         if saved["replacement"] != curriculum_sampler.replacement:
             raise ValueError("checkpoint replacement sampling does not match")
-        for name in ("embedding", "ema_cluster_size", "ema_weight", "reward_ema", "reward_seen"):
+        for name in ("embedding", "ema_cluster_size", "ema_weight", "reward_ema", "reward_seen", "last_seen", "visit_count"):
             if saved[name].shape != getattr(memory, name).shape:
                 raise ValueError("checkpoint codebook dimensions do not match")
             setattr(memory, name, saved[name].clone())
+        memory.update_step = int(saved["update_step"])
+        memory.revival_count = int(saved["revival_count"])
         memory.filled_slots = int(saved["filled_slots"])
         memory.is_initialized = bool(saved["is_initialized"])
         curriculum_sampler.epoch_count = int(saved["epoch_count"])
@@ -124,8 +128,8 @@ def save_checkpoint(backend, runtime, *, directory, stage, completed_epoch, iden
     torch.save(state, staging / f"rank_{runtime.rank:05d}.pt")
     if runtime.rank == 0:
         backend.save_pretrained(staging)
-        metadata = dict(format_version=2, stage=stage, completed_epoch=completed_epoch,
-                        identity=identity, world_size=runtime.world_size)
+        metadata = dict(format_version=3, stage=stage, completed_epoch=completed_epoch,
+                        identity=identity, world_size=runtime.world_size, source_revision=source_revision())
         (staging / "checkpoint.json").write_text(json.dumps(metadata, indent=2))
         (staging / "training_config.json").write_text(json.dumps(configuration, indent=2))
         (staging / "training_history.json").write_text(json.dumps(history, indent=2))
@@ -141,7 +145,7 @@ def restore_checkpoint(runtime, *, directory, stage, identity, generators,
                        baseline_store, curriculum_sampler):
     path = Path(directory)
     saved = json.loads((path / "checkpoint.json").read_text())
-    if (saved["format_version"] != 2 or saved["stage"] != stage or saved["identity"] != identity
+    if (saved["format_version"] != 3 or saved["stage"] != stage or saved["identity"] != identity
             or saved["world_size"] != runtime.world_size):
         raise ValueError("checkpoint stage, source, data, settings or world size does not match")
     if runtime.engine is not None:

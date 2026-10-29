@@ -12,6 +12,7 @@ import torch
 
 from data.manifest import load_manifest, training_class_counts
 from data.config import load_config
+from data.lengths import target_lengths, length_summary
 from models.huggingface import DecodingConfig, HuggingFaceBackend
 from rewards import RewardConfig, RARSParameters
 from rl import DACVQState, ShaeBaselineStore, VGSSampler
@@ -47,6 +48,15 @@ def run(stage: str, configuration: dict) -> list:
     backend = HuggingFaceBackend.from_pretrained(**current_model, generation=generation)
     backend.enable_training(configuration["loop"]["max_sequence_length"])
     runtime = zero2_runtime(backend, configuration["optimizer"], configuration["loop"]["max_grad_norm"])
+    local_lengths = target_lengths(backend.processor, manifest.records[runtime.rank::runtime.world_size],
+                                   manifest.output_classes, generation)
+    all_lengths = sorted((row for shard in runtime.gather(local_lengths) for row in shard), key=lambda row: row["uid"])
+    report = length_summary(all_lengths, generation.max_new_tokens)
+    if runtime.rank == 0:
+        Path(configuration["output_dir"]).mkdir(parents=True, exist_ok=True)
+        (Path(configuration["output_dir"]) / "target_lengths.json").write_text(json.dumps(report, indent=2))
+    if report["over_budget_groups"]:
+        raise ValueError(f"{report['over_budget_groups']} GT targets exceed max_new_tokens; see target_lengths.json")
     generators = {"order": torch.Generator().manual_seed(configuration["order_seed"])}
     baseline = sampler = shae = reference = None
     visual_vectors = {record["uid"]: record.get("visual_vector") for record in manifest.records}
@@ -64,7 +74,7 @@ def run(stage: str, configuration: dict) -> list:
         reward_settings = dict(configuration["reward"])
         reward_settings["rars_parameters"] = RARSParameters(**reward_settings["rars_parameters"])
         reward = RewardConfig(
-            classes=manifest.classes, rars_enabled=switches.rars, **reward_settings,
+            classes=manifest.output_classes, rars_enabled=switches.rars, **reward_settings,
         )
         # Both policies originate from the explicitly selected post-SFT model.
         reference = HuggingFaceBackend.from_pretrained(**source_model, generation=generation)
@@ -92,8 +102,7 @@ def run(stage: str, configuration: dict) -> list:
     source_fingerprint = runtime.gather(source_identity(source_model) if runtime.rank == 0 else None)[0]
     identity = training_identity(
         configuration,
-        {"classes": list(manifest.classes), "patients": manifest.patients, "records": manifest.records,
-         "source": source_fingerprint},
+        {**manifest.payload(), "source": source_fingerprint},
     )
     start_epoch, previous_history = 0, []
     if resume_from is not None:

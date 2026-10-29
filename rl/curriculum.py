@@ -31,7 +31,7 @@ class DACVQState:
 
     ``update`` consumes one occurrence's mean *clipped reward*, after the policy
     update, never its normalized advantage. Unassigned codes keep their state;
-    low-mass codes remain active until optionally revived in place.
+    codes remain active until idle for more than dead_code_idle_updates real feature updates.
     """
 
     def __init__(
@@ -42,7 +42,7 @@ class DACVQState:
         feature_decay: float,
         reward_decay: float,
         difficulty_beta: float,
-        dead_code_threshold: float,
+        dead_code_idle_updates: int,
         dead_code_replace_probability: float,
         revival_noise_std: float,
         diversity_threshold: float,
@@ -59,7 +59,6 @@ class DACVQState:
         for name, value in (
             ("feature_decay", feature_decay), ("reward_decay", reward_decay),
             ("difficulty_beta", difficulty_beta),
-            ("dead_code_threshold", dead_code_threshold),
             ("dead_code_replace_probability", dead_code_replace_probability),
             ("revival_noise_std", revival_noise_std),
             ("diversity_threshold", diversity_threshold),
@@ -71,8 +70,11 @@ class DACVQState:
             raise ValueError("EMA decays must be in [0, 1)")
         if self.difficulty_beta <= 0 or self.mass_epsilon <= 0:
             raise ValueError("difficulty_beta and mass_epsilon must be positive")
-        if self.dead_code_threshold < 0 or self.revival_noise_std < 0:
-            raise ValueError("dead_code_threshold and revival_noise_std must be nonnegative")
+        if type(dead_code_idle_updates) is not int or dead_code_idle_updates < max_codes:
+            raise ValueError("dead_code_idle_updates must be an integer at least max_codes")
+        self.dead_code_idle_updates = dead_code_idle_updates
+        if self.revival_noise_std < 0:
+            raise ValueError("revival_noise_std must be nonnegative")
         if not 0 <= self.dead_code_replace_probability <= 1:
             raise ValueError("dead_code_replace_probability must be in [0, 1]")
         if not -1 <= self.diversity_threshold <= 1:
@@ -85,6 +87,10 @@ class DACVQState:
         self.ema_weight = torch.zeros_like(self.embedding)
         self.reward_ema = torch.zeros(max_codes, dtype=torch.float64)
         self.reward_seen = torch.zeros(max_codes, dtype=torch.int64)
+        self.update_step = 0
+        self.revival_count = 0
+        self.last_seen = torch.zeros(max_codes, dtype=torch.int64)
+        self.visit_count = torch.zeros(max_codes, dtype=torch.int64)
         self.filled_slots = 0
         self.is_initialized = False
 
@@ -119,6 +125,8 @@ class DACVQState:
         self.ema_weight[code] = vector
         self.reward_ema[code] = 0
         self.reward_seen[code] = 0
+        self.last_seen[code] = self.update_step
+        self.visit_count[code] = 0
 
     def online_init_step(self, vector: torch.Tensor) -> bool:
         """Admit a diverse normalized vector while initialization is open."""
@@ -161,12 +169,16 @@ class DACVQState:
         reward = _finite("mean_reward", mean_reward)
         if not self.reward_min <= reward <= self.reward_max:
             raise ValueError("mean_reward must be the mean of rewards within the clipping bounds")
+        self.update_step += 1
         if not self.is_initialized:
             self.online_init_step(values)
         code, _ = self.quantize(values)
         weight = 1 - (reward - self.reward_min) / (self.reward_max - self.reward_min)
-        self.ema_cluster_size[:self.filled_slots].mul_(self.feature_decay)
-        self.ema_weight[:self.filled_slots].mul_(self.feature_decay)
+        self.last_seen[code] = self.update_step
+        self.visit_count[code] += 1
+        # Feature quality decays per assigned visit. It is never an activity counter.
+        self.ema_cluster_size[code].mul_(self.feature_decay)
+        self.ema_weight[code].mul_(self.feature_decay)
         mass = self.ema_cluster_size[code] + (1 - self.feature_decay) * weight
         accumulator = self.ema_weight[code] + (1 - self.feature_decay) * weight * values
         self.ema_cluster_size[code] = mass
@@ -186,7 +198,8 @@ class DACVQState:
         if self.is_initialized:
             draw = float(torch.rand((), generator=self.generator))
             if draw < self.dead_code_replace_probability:
-                dead = (self.ema_cluster_size[:self.filled_slots] < self.dead_code_threshold).nonzero().flatten()
+                idle = self.update_step - self.last_seen[:self.filled_slots]
+                dead = (idle > self.dead_code_idle_updates).nonzero().flatten()
                 if dead.numel():
                     noise = torch.randn(values.shape, dtype=values.dtype, generator=self.generator)
                     # Algebraically identical to normalize(z + sigma*noise),
@@ -195,7 +208,9 @@ class DACVQState:
                     revived = values / scale + (self.revival_noise_std / scale) * noise
                     if revived.abs().max() == 0:
                         revived = values
-                    self._reset_code(int(dead[0]), self.normalize(revived))
+                    oldest = int(dead[idle[dead].argmax()])
+                    self._reset_code(oldest, self.normalize(revived))
+                    self.revival_count += 1
         return code
 
     def difficulty_weights(self) -> torch.Tensor:

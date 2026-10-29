@@ -74,6 +74,8 @@ class RolloutBatch:
     response_mask: torch.Tensor
     old_log_probabilities: torch.Tensor
     completion_nlls: list[float]
+    finish_reasons: list[str]
+    completion_token_counts: list[int]
 
 
 def _through_first_eos(tokens: torch.Tensor, eos_token_ids: Sequence[int]) -> torch.Tensor:
@@ -283,7 +285,10 @@ class HuggingFaceBackend:
                 [tokens[keep] for tokens, keep in zip(generated, retained)],
                 skip_special_tokens=True, clean_up_tokenization_spaces=False,
             )
-            return RolloutBatch(list(texts), complete_inputs, mask, old_log_probs, nlls)
+            lengths = retained.sum(dim=1).tolist()
+            reasons = ["eos" if int(tokens[int(length) - 1]) in self.generation.eos_token_ids else "length"
+                       for tokens, length in zip(generated, lengths)]
+            return RolloutBatch(list(texts), complete_inputs, mask, old_log_probs, nlls, reasons, lengths)
         finally:
             self.model.train(training)
 

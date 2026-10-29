@@ -139,7 +139,7 @@
       "feature_decay": 0.95,
       "reward_decay": 0.9,
       "difficulty_beta": 3.0,
-      "dead_code_threshold": 0.25,
+      "dead_code_idle_updates": 1024,
       "dead_code_replace_probability": 0.3,
       "revival_noise_std": 0.001,
       "diversity_threshold": 0.85,

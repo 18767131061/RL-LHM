@@ -48,7 +48,7 @@ def run(config: dict) -> int:
     output = Path(config["output"])
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("w", encoding="utf-8") as stream:
-        json.dump({"classes": list(manifest.classes), "patients": manifest.patients, "records": records},
+        json.dump({**manifest.payload(), "records": records},
                   stream, ensure_ascii=False, allow_nan=False, indent=2)
         stream.write("\n")
     return len(records)

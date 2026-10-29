@@ -4,10 +4,24 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 
+def class_spaces(output_classes, metric_classes=None):
+    output = tuple(output_classes)
+    metric = output if metric_classes is None else tuple(metric_classes)
+    for name, labels in (("output_classes", output), ("metric_classes", metric)):
+        if (not labels or len(labels) != len(set(labels))
+                or any(not isinstance(label, str) or not label for label in labels)):
+            raise ValueError(f"{name} must contain unique nonempty strings")
+    if not set(metric) <= set(output):
+        raise ValueError("metric_classes must be a fixed subset of output_classes")
+    return output, metric
+
+
 def classification_metrics(
     truth: Sequence[str],
     predictions: Sequence[str | None],
-    classes: Sequence[str],
+    output_classes: Sequence[str],
+    *,
+    metric_classes: Sequence[str] | None = None,
 ) -> dict:
     """Compute accuracy and macro metrics, retaining undefined predictions.
 
@@ -15,10 +29,7 @@ def classification_metrics(
     false positive. Every supplied patient remains in the accuracy denominator.
     Classes without support retain zero precision, recall, and F1 in the macro.
     """
-    labels = tuple(classes)
-    if (not labels or len(labels) != len(set(labels))
-            or any(not isinstance(label, str) or not label for label in labels)):
-        raise ValueError("classes must be a non-empty sequence of unique strings")
+    labels, macro_labels = class_spaces(output_classes, metric_classes)
     if len(truth) != len(predictions):
         raise ValueError("truth and prediction lengths must match")
     if any(label not in labels for label in truth):
@@ -39,9 +50,10 @@ def classification_metrics(
         }
     return {
         "n": len(truth),
+        "output_classes": list(labels), "metric_classes": list(macro_labels),
         "accuracy": sum(actual == predicted for actual, predicted in zip(truth, predictions)) / len(truth) if len(truth) else 0.0,
-        "macro_precision": sum(per_class[label]["precision"] for label in labels) / len(labels),
-        "macro_recall": sum(per_class[label]["recall"] for label in labels) / len(labels),
-        "macro_f1": sum(per_class[label]["f1"] for label in labels) / len(labels),
+        "macro_precision": sum(per_class[label]["precision"] for label in macro_labels) / len(macro_labels),
+        "macro_recall": sum(per_class[label]["recall"] for label in macro_labels) / len(macro_labels),
+        "macro_f1": sum(per_class[label]["f1"] for label in macro_labels) / len(macro_labels),
         "per_class": per_class,
     }

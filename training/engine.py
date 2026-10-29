@@ -182,17 +182,18 @@ def fit_rl(backend, reference, records, *, runtime, epochs, start_epoch, batch_s
                         rollout = backend.generate([record])
                         score = compute_score(rollout.texts[0], record["ground_truth"],
                                               completion_nll=rollout.completion_nlls[0],
-                                              class_counts=class_counts, config=config)["score"]
+                                              class_counts=class_counts, config=config,
+                                              finish_reason=rollout.finish_reasons[0])["score"]
                         ref = reference.log_probabilities(rollout).detach().cpu()
                         rollout = _cpu_rollout(rollout)
                         ordinal = position * group_size + member
                         chunks.append((ordinal, rollout, ref, real))
                         if real:
-                            local_scores.append((ordinal, score))
+                            local_scores.append((ordinal, score, rollout.finish_reasons[0], rollout.completion_token_counts[0]))
             scored = sorted(item for shard in runtime.gather(local_scores) for item in shard)
-            if [ordinal for ordinal, _ in scored] != list(range(len(sampled) * group_size)):
+            if [ordinal for ordinal, *_ in scored] != list(range(len(sampled) * group_size)):
                 raise ValueError("distributed rollout population is not complete and unique")
-            rewards = torch.tensor([score for _, score in scored], dtype=torch.float32)
+            rewards = torch.tensor([item[1] for item in scored], dtype=torch.float32)
             rids = [f"{epoch}:{step}:{position}" for position in range(len(sampled)) for _ in range(group_size)]
             uids = [record["uid"] for record in sampled for _ in range(group_size)]
             mask = torch.ones(len(rewards), 1)
@@ -231,6 +232,9 @@ def fit_rl(backend, reference, records, *, runtime, epochs, start_epoch, batch_s
                 history.append(dict(epoch=epoch, step=step, policy_update=update,
                                     loss=runtime.sum(total_loss), gradient_norm=norm,
                                     mean_reward=float(rewards.mean()), input_count=len(sampled),
+                                    eos_completions=sum(item[2] == "eos" for item in scored),
+                                    length_limited_completions=sum(item[2] == "length" for item in scored),
+                                    truncation_rate=sum(item[2] == "length" for item in scored) / len(scored),
                                     completion_count=len(rewards), retained_tokens=count))
             if curriculum_sampler is not None:
                 update_curriculum(curriculum_sampler.state, rewards, rids, uids, visual_vectors)

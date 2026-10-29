@@ -30,3 +30,5 @@
 Package `__init__.py` files define public imports or package descriptions. `requirements.txt` specifies dependencies, `CITATION.cff` provides citation metadata, and `LICENSE` provides the MIT license. `README.md` describes the workflow; `docs/configuration.md` defines inputs/settings; `docs/algorithms.md` defines mathematical interfaces. `.gitignore` excludes local Python caches and environments.
 
 `training/distributed.py` owns rank assignment, global reductions, ZeRO-2 CPU offload and accumulation boundaries. `configs/` contains complete four-A800 SFT/RL and feature/inference configurations. `tests/` covers algorithm boundaries, four-process equivalence, model probabilities and checkpoint continuation.
+
+`data/lengths.py` and `data/check_lengths.py` check chat-template target budgets. `data/provenance.py` supplies artifact identities. `evaluation/analyze.py` performs center stratification, fixed-class patient bootstrap and paired comparisons.

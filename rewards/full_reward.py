@@ -8,7 +8,7 @@ from types import MappingProxyType
 
 import numpy as np
 
-from matching.geometry import box_iou, generalized_box_iou, hungarian_assignment
+from matching.geometry import box_iou, generalized_box_iou, eligible_giou_assignment
 from .schema import PHASES, SchemaError, parse_completion
 from .rars import (RARSParameters, build_rars_confusion_cost, completion_likelihood,
                    normalize_class_counts, validate_risk_matrix)
@@ -53,15 +53,17 @@ class RewardConfig:
 
 def compute_score(solution: str, ground_truth: str, *, completion_nll: float,
                   class_counts: Mapping[str, int], config: RewardConfig,
-                  aliases: Mapping[str, str] | None = None) -> dict[str, object]:
+                  aliases: Mapping[str, str] | None = None,
+                  finish_reason: str | None = None) -> dict[str, object]:
     """Average phase utilities, each in [-1,1], then apply component weights.
 
-    One GIoU assignment defines eligible pairs for both components. Each missed
+    One eligible-edge GIoU assignment defines pairs for both components. Each missed
     GT and each unmatched prediction costs one unit. The denominator is the GT
     count plus unmatched predictions (one background slot for empty GT phases).
     Wrong diagnoses cost RARS / maximum possible RARS over the fixed class space
-    at likelihood one. Thus omission cannot improve an eligible wrong diagnosis,
-    and adding unmatched records lowers utility unless already at its minimum.
+    at likelihood one. Replacing a matched diagnosis by an omission cannot help
+    when the other pairs stay fixed. Adding wholly ineligible records cannot
+    alter existing pairs and lowers utility unless already at its minimum.
     Invalid JSON receives the minimum structured utility. GT is fully annotated
     across a/p/v; a phase without lesions is a background phase.
     """
@@ -82,6 +84,10 @@ def compute_score(solution: str, ground_truth: str, *, completion_nll: float,
                                  config.rars_parameters)[0]
         for gt in config.classes for pred in config.classes if gt != pred
     ]) if config.rars_enabled else 1.0
+    if finish_reason not in (None, "eos", "length"):
+        raise ValueError("finish_reason must be eos, length or None")
+    if finish_reason == "length":
+        return result
     try:
         predicted = parse_completion(solution, config.classes, aliases)
     except SchemaError:
@@ -93,9 +99,7 @@ def compute_score(solution: str, ground_truth: str, *, completion_nll: float,
         outputs = [item for item in predicted.detections if item.phase == phase]
         matrix = np.asarray([[generalized_box_iou(gt.box, pr.box) for pr in outputs]
                              for gt in targets], dtype=float).reshape(len(targets), len(outputs))
-        pairs = [pair for pair in hungarian_assignment(matrix)
-                 if pair.gt_index is not None and pair.prediction_index is not None
-                 and pair.similarity >= config.giou_for_classification]
+        pairs = eligible_giou_assignment(matrix, config.giou_for_classification)
         fp, fn = len(outputs) - len(pairs), len(targets) - len(pairs)
         denominator = max(1, len(targets)) + fp
         loc = diag = -float(fn + fp)

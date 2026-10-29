@@ -90,3 +90,13 @@ def test_visual_feature_extraction_uses_frozen_phase_patches(tmp_path):
     assert vectors[0].shape == (24,)
     assert vectors[0].norm().item() == pytest.approx(1.0, abs=1e-6)
     assert not vectors[0].requires_grad
+
+
+@pytest.mark.parametrize("tokens,reason,count", [([2, 0, 0], "eos", 1), ([5, 6, 2], "eos", 3), ([5, 6, 7], "length", 3)])
+def test_generation_finish_reason_distinguishes_eos_at_limit(tokens, reason, count):
+    backend, inputs = tiny_backend()
+    backend.model.generate = lambda **kwargs: torch.cat([inputs["input_ids"], torch.tensor([tokens])], dim=1)
+    rollout = backend.generate([{}])
+    assert rollout.finish_reasons == [reason]
+    assert rollout.completion_token_counts == [count]
+    assert int(rollout.response_mask.sum()) == count

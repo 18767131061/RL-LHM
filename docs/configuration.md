@@ -4,11 +4,13 @@ Stage configuration files are JSON objects. Supply the fields below explicitly. 
 
 ## Manifest
 
-The input JSON has exactly three top-level fields:
+The input JSON declares the output vocabulary, fixed evaluation classes, patient population and input records:
 
 | Field | Meaning |
 | --- | --- |
-| `classes` | Ordered unique canonical labels; this order resolves diagnostic voting ties |
+| `output_classes` | Ordered unique canonical output labels; this order resolves voting ties |
+| `metric_classes` | Fixed nonempty subset for macro metrics; defaults to all output classes |
+| `patient_centers` | Optional mapping of every patient ID to its center |
 | `patients` | Object mapping every patient ID in the population to its true diagnostic label |
 | `records` | List of complete three-phase input groups |
 
@@ -18,7 +20,7 @@ An optional `visual_vector` is a finite, nonzero numeric list with the same dime
 
 A structured completion contains a `detections` list. Each detection has `phase` (`a`, `p`, or `v`), `label` (a canonical class), and `bbox_2d` (`[x1,y1,x2,y2]`, numeric coordinates on `[0,1000]`, positive width and height). Background uses `label="no-lesion"` and `bbox_2d=[-1,-1,-1,-1]`, once per background phase. A phase contains either background or lesions. Multiple lesions in one phase are retained. An omitted output phase is allowed.
 
-Training class counts are computed once from the complete fitting manifest. Each positive group contributes one count to its most frequent ground-truth lesion label across phases; ties use the lexicographically greatest label. Background-only groups contribute no count. Counts remain fixed during sampling and across seeds on the same manifest.
+Training class counts are computed once from the complete fitting manifest. Each positive group contributes one count to its most frequent ground-truth lesion label across phases; ties use output class order. Background-only groups contribute no count. Counts remain fixed during sampling and across seeds on the same manifest.
 
 ## Shared model and decoding objects
 
@@ -93,11 +95,11 @@ For RL, `model` points to the run's post-SFT checkpoint. A new run loads separat
 
 The `reward` object contains `severity_matrix` (true-label rows, predicted-label columns, complete symmetric off-diagonal entries), `rars_parameters` (`scarcity_alpha`, `confidence_eta`, `severity_kappa`, `count_epsilon`), `giou_for_classification`, `detection_weight`, `classification_weight`, `clip_min`, and `clip_max`.
 
-`curriculum.state` contains `max_codes`, `input_dim`, `feature_decay`, `reward_decay`, `difficulty_beta`, `dead_code_threshold`, `dead_code_replace_probability`, `revival_noise_std`, `diversity_threshold`, `reward_min`, `reward_max`, and `mass_epsilon`. `input_dim` equals the vector length; reward bounds equal reward clipping bounds. `difficulty_beta` is inverse sampling temperature.
+`curriculum.state` contains `max_codes`, `input_dim`, `feature_decay`, `reward_decay`, `difficulty_beta`, `dead_code_idle_updates`, `dead_code_replace_probability`, `revival_noise_std`, `diversity_threshold`, `reward_min`, `reward_max`, and `mass_epsilon`. `input_dim` equals the vector length; reward bounds equal reward clipping bounds. `difficulty_beta` is inverse sampling temperature. `dead_code_idle_updates` counts real occurrence updates with available visual features; the supplied value 1024 allows 16 complete visits of a 64-code book. Feature quality mass never determines activity. A code becomes eligible for revival only after more than this many updates without assignment.
 
 Each occurrence has its own RID and G completions on one worker. Every worker applies global occurrence-ordered UID baseline and DA-CVQ updates. SHAE uses population Std for group centering and RMS for history residuals; SHAE-off uses the same population Std. RARS-off uses unit diagnostic error costs. `sampling.replacement` controls uniform sampling when curriculum is off.
 
-Epoch directories contain a Hugging Face model/processor, collective ZeRO shards under `zero/`, per-rank state files, `checkpoint.json`, `training_config.json`, and `training_history.json`. A directory is published by atomic rename only after all workers finish writing. Continuation restores optimizer, per-rank RNG, shared CPU generators, UID baseline, codebook and sampler epoch. Keep all files on shared local storage and resume with the same four GPUs/process count. The source model, manifest and mathematical settings identify the run; output directory, continuation path and total target epoch count may change. An interrupted `.incomplete` directory is not a completed checkpoint.
+Epoch directories contain a Hugging Face model/processor, collective ZeRO shards under `zero/`, per-rank state files, `checkpoint.json` (format version 3), `training_config.json`, and `training_history.json`. A directory is published by atomic rename only after all workers finish writing. Continuation restores optimizer, per-rank RNG, shared CPU generators, UID baseline, codebook and sampler epoch. Keep all files on shared local storage and resume with the same four GPUs/process count. The source model, manifest and mathematical settings identify the run; output directory, continuation path and total target epoch count may change. An interrupted `.incomplete` directory is not a completed checkpoint.
 
 ## Frozen visual vectors
 
@@ -107,7 +109,7 @@ Run `python -m inference.visual_features --config ...` with `manifest`, `output`
 
 ## Inference
 
-Run `python -m inference.run --config ...` with `manifest`, `output`, `batch_size`, `seed`, `model`, and `generation`. Select the trained checkpoint and its saved processor. Output is JSONL with one row per group: `uid`, `patient_id`, `completion`, and `nll`.
+Run `python -m inference.run --config ...` with `manifest`, `output`, `batch_size`, `seed`, `model`, and `generation`. Optional `phase_sources` maps each a/p/v input slot to an original phase; the default is the identity map. Repeating one phase changes image inputs only and retains the original targets for intervention analysis. Select the trained checkpoint and its saved processor. Output JSONL contains `uid`, `patient_id`, `completion`, `nll`, `finish_reason` (`eos` or `length`), `completion_tokens`, `max_new_tokens`, `target_tokens`, and `phase_sources`. An EOS at the last allowed position is an EOS termination. A sidecar `.metadata.json` records configuration, code revision, checkpoint identity, manifest/prediction hashes and target lengths.
 
 ## Evaluation
 
@@ -116,3 +118,16 @@ Run `python -m evaluation.evaluate` with `--manifest`, `--predictions`, `--iou-t
 Outputs are `metrics.json`, `patient_predictions.jsonl`, and `group_predictions.jsonl`. Patient accuracy and macro precision/recall/F1 use the fixed patient and class populations. Groups vote by lesion-label majority; patient ties use mean finite NLL, then class order. Patients without votes remain in the metrics with undefined predictions.
 
 Main detection metrics use every input phase slice. `detection_positive_only` separately reports the positive-slice conditional metrics. `background_false_positives` reports background FP count and burden. CA maximizes total IoU. GFCA filters that same assignment by class agreement. Same-class-first maximizes the number of same-class pairs, then total IoU. Precision/recall/F1 use TP/FP/FN at every threshold. Mean IoU uses unthresholded CA divided by all GT lesions. Acc@IoU>0 uses accepted positive-overlap matches divided by all GT lesions.
+
+
+## Fixed class spaces, termination and matching
+
+New manifests use `output_classes`. Legacy `classes` is accepted as an output-vocabulary alias; supply only one of these fields. `metric_classes` is fixed before evaluating or resampling, even if a bootstrap sample omits a class. Parsing and group/patient voting always use all output classes. Classification accuracy retains all patients, including legal out-of-target predictions and patients without votes.
+
+The evaluator accepts direct CLI arguments or `--config configs/evaluation_loco.json`; explicit CLI fields override configuration fields. `--metric-classes` can override the manifest's fixed macro list. `--require-termination-metadata` rejects prediction files lacking EOS/length metadata. Older prediction files remain readable with termination counted as `unknown`, never included in the known-termination truncation denominator. Known length-limited outputs remain in patient/GT denominators but provide no completed diagnostic vote or lesion prediction, even if the partial string parses as JSON. RL gives these outputs the minimum structured utility.
+
+`--matching-method max_total_iou` selects the three original protocols. `--matching-method threshold_aware` selects separately named threshold-aware class-agnostic and class-aware protocols. Both families are always returned in `detection_by_matching` and `detection_positive_only_by_matching`. `matching_sensitivity` lists phase/threshold cases whose TP counts differ between corresponding protocols. Mean IoU always uses unthresholded maximum-total-IoU class-agnostic assignment, independently of this selection.
+
+`python -m data.check_lengths --config ... --output ...` loads only the processor, computes the chat-template target suffix including EOS, and exits with code 1 if any target exceeds `max_new_tokens`. Training performs the same check across ranks before any optimizer update and saves `target_lengths.json`; SFT never truncates annotations. Generation/evaluation statistics include per-class and per-lesion-count breakdowns.
+
+`evaluation.analyze` computes fixed-class patient bootstrap confidence intervals, paired classification differences, per-center classification, center×class counts, descriptive constant-prediction references and detection/localization differences. Paired comparisons require the same patients, truths, class spaces, primary matching method and IoU thresholds. The bootstrap unit is one patient, not a lesion, image or training seed. Optional named split manifests produce center×class tables and patient-overlap counts.

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import math
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from rewards.schema import PHASES, parse_completion
@@ -13,9 +13,32 @@ from rewards.schema import PHASES, parse_completion
 
 @dataclass(frozen=True)
 class Manifest:
-    classes: tuple[str, ...]
+    output_classes: tuple[str, ...]
     patients: dict[str, str]
     records: list[dict]
+    metric_classes: tuple[str, ...] | None = None
+    patient_centers: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        from evaluation.classification import class_spaces
+        output, metric = class_spaces(self.output_classes, self.metric_classes)
+        object.__setattr__(self, "output_classes", output)
+        object.__setattr__(self, "metric_classes", metric)
+        if not isinstance(self.patient_centers, dict):
+            raise ValueError("patient_centers must be a dictionary")
+        if self.patient_centers and (set(self.patient_centers) != set(self.patients)
+                or any(not isinstance(center, str) or not center.strip() for center in self.patient_centers.values())):
+            raise ValueError("patient_centers must give a nonempty center for every patient")
+
+    @property
+    def classes(self):
+        """Compatibility alias for the output vocabulary."""
+        return self.output_classes
+
+    def payload(self):
+        return dict(output_classes=list(self.output_classes), metric_classes=list(self.metric_classes),
+                    patients=self.patients, patient_centers=self.patient_centers,
+                    records=[{k: v for k, v in row.items() if k != "patient_label"} for row in self.records])
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict:
@@ -49,9 +72,11 @@ def load_manifest(path: str | Path) -> Manifest:
     with path.open(encoding="utf-8") as stream:
         payload = json.load(stream, object_pairs_hook=_unique_object,
                             parse_constant=_constant)
-    if not isinstance(payload, dict) or set(payload) != {"classes", "patients", "records"}:
-        raise ValueError("Manifest must contain classes, patients, and records")
-    classes = payload["classes"]
+    if (not isinstance(payload, dict) or not {"patients", "records"} <= payload.keys()
+            or set(payload) - {"classes", "output_classes", "metric_classes", "patients", "records", "patient_centers"}
+            or ("classes" in payload) == ("output_classes" in payload)):
+        raise ValueError("Manifest needs output_classes, patients, records; classes is a legacy alias")
+    classes = payload.get("output_classes", payload.get("classes"))
     if (not isinstance(classes, list) or not classes
             or any(not isinstance(c, str) or not c.strip() for c in classes)
             or len(set(classes)) != len(classes) or "no-lesion" in classes):
@@ -101,7 +126,9 @@ def load_manifest(path: str | Path) -> Manifest:
                 raise ValueError("All visual vectors must share one dimension")
             vector_dimension = len(vector)
         records.append(record)
-    return Manifest(tuple(classes), dict(patients), records)
+    return Manifest(tuple(classes), dict(patients), records,
+                    tuple(payload["metric_classes"]) if "metric_classes" in payload else None,
+                    payload.get("patient_centers", {}))
 
 
 def training_class_counts(manifest: Manifest) -> dict[str, int]:
@@ -112,9 +139,9 @@ def training_class_counts(manifest: Manifest) -> dict[str, int]:
     """
     counts: Counter[str] = Counter()
     for record in manifest.records:
-        parsed = parse_completion(record["ground_truth"], manifest.classes)
+        parsed = parse_completion(record["ground_truth"], manifest.output_classes)
         labels = Counter(detection.label for detection in parsed.detections)
         if labels:
-            label = max(manifest.classes, key=lambda item: labels[item])
+            label = max(manifest.output_classes, key=lambda item: labels[item])
             counts[label] += 1
     return dict(counts)

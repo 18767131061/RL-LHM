@@ -118,3 +118,37 @@ def match_protocol(
         )
         for assignment in hungarian_assignment(objective)
     ]
+
+# These are distinct protocols: geometry-first class-aware remains geometry-first.
+THRESHOLD_CLASS_AGNOSTIC = "threshold_aware_class_agnostic"
+THRESHOLD_CLASS_AWARE = "threshold_aware_class_aware"
+THRESHOLD_PROTOCOLS = (THRESHOLD_CLASS_AGNOSTIC, THRESHOLD_CLASS_AWARE)
+ALL_PROTOCOLS = PROTOCOLS + THRESHOLD_PROTOCOLS
+
+
+def match_threshold_aware(similarity, gt_labels, prediction_labels, protocol, threshold):
+    """Maximize eligible TP count, then IoU sum of eligible pairs only.
+
+    Rejected pairings carry zero objective and are returned as unmatched entries.
+    Class-aware eligibility requires both the IoU threshold and identical labels.
+    """
+    if protocol not in THRESHOLD_PROTOCOLS:
+        raise ValueError("unknown threshold-aware protocol")
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("IoU threshold must lie in [0,1]")
+    matrix = _validate_inputs(similarity, gt_labels, prediction_labels)
+    eligible = matrix > 0 if threshold == 0 else matrix >= threshold
+    if protocol == THRESHOLD_CLASS_AWARE:
+        eligible &= np.asarray([[gt == pred for pred in prediction_labels] for gt in gt_labels],
+                               dtype=bool).reshape(matrix.shape)
+    bonus = min(matrix.shape) + 1
+    objective = np.where(eligible, bonus + matrix, 0.0)
+    matches = []
+    for assignment in hungarian_assignment(objective):
+        i, j = assignment.gt_index, assignment.prediction_index
+        if i is not None and j is not None and not eligible[i, j]:
+            matches.extend((ProtocolMatch(i, None, 0.0, False, protocol),
+                            ProtocolMatch(None, j, 0.0, False, protocol)))
+        else:
+            matches.append(_to_protocol_match(assignment, matrix, gt_labels, prediction_labels, protocol))
+    return matches

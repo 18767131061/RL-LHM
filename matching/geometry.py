@@ -107,3 +107,34 @@ def hungarian_assignment(similarity: np.ndarray) -> list[Assignment]:
             -1 if item.prediction_index is None else item.prediction_index,
         ),
     )
+
+
+def eligible_giou_assignment(similarity: np.ndarray, threshold: float) -> list[Assignment]:
+    """Return eligible pairs, maximizing their count, then their total GIoU.
+
+    Unlike unconstrained Hungarian matching, edges below the cutoff cannot
+    displace eligible edges. Unmatched rows/columns are permitted and omitted
+    from the result. GIoU (including negative values) has its own [-1, 1] domain.
+    """
+    matrix = np.asarray(similarity, dtype=float)
+    if (matrix.ndim != 2 or not np.all(np.isfinite(matrix))
+            or np.any((matrix < -1) | (matrix > 1))):
+        raise ValueError("GIoU must be a finite two-dimensional matrix in [-1,1]")
+    if not np.isfinite(threshold) or not -1 <= threshold <= 1:
+        raise ValueError("GIoU threshold must lie in [-1,1]")
+    eligible = matrix >= threshold
+    # Remove isolated vertices before solving: adding a wholly ineligible FP
+    # must not even change tie-breaking among the existing eligible matches.
+    gt_indices = np.flatnonzero(eligible.any(axis=1))
+    pred_indices = np.flatnonzero(eligible.any(axis=0))
+    if not len(gt_indices) or not len(pred_indices):
+        return []
+    active = np.ix_(gt_indices, pred_indices)
+    # Secondary weights lie in [0,2]. One extra match outweighs every possible
+    # secondary-weight difference; zero-weight forbidden edges are discarded.
+    bonus = 2 * min(len(gt_indices), len(pred_indices)) + 1
+    objective = np.where(eligible[active], bonus + matrix[active] + 1, 0)
+    rows, columns = linear_sum_assignment(-objective)
+    return [Assignment(int(gt_indices[row]), int(pred_indices[column]),
+                       float(matrix[gt_indices[row], pred_indices[column]]))
+            for row, column in zip(rows, columns) if eligible[active][row, column]]

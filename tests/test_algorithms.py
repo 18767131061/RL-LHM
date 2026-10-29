@@ -109,7 +109,7 @@ def test_first_visit_and_grpo_scale():
 
 def memory():
     return DACVQState(max_codes=3, input_dim=3, feature_decay=0.5, reward_decay=0.9,
-                      difficulty_beta=1, dead_code_threshold=0.1, dead_code_replace_probability=0,
+                      difficulty_beta=1, dead_code_idle_updates=30, dead_code_replace_probability=0,
                       revival_noise_std=0.01, diversity_threshold=0.9, reward_min=-2, reward_max=2,
                       mass_epsilon=1e-8, generator=torch.Generator().manual_seed(7))
 
@@ -144,14 +144,14 @@ def test_sampling_and_resume(replacement, use_vgs):
 def test_unused_codes_decay_and_revival():
     state = memory()
     for i in range(3):
-        state.update(str(i), torch.eye(3)[i], -1)
-    initial = state.ema_cluster_size[1].item()
-    for _ in range(10):
-        state.update("0", torch.eye(3)[0], -1)
-    assert state.ema_cluster_size[1] < initial / 100
+        state.update(str(i), torch.eye(3)[i], 2)
     state.dead_code_replace_probability = 1
-    state.update("0", torch.eye(3)[0], -1)
-    assert state.ema_cluster_size[1] == 1
+    for _ in range(31):
+        state.update("0", torch.eye(3)[0], 2)
+    assert state.revival_count > 0
+    assert state.visit_count[0] == 32
+    assert state.reward_seen[0] == 32
+    assert state.reward_ema[0] == 2
     torch.testing.assert_close(state.embedding.norm(dim=1), torch.ones(3, dtype=torch.float64))
 
 
@@ -176,7 +176,8 @@ def test_configurations_construct_all_components():
     from training.engine import ComponentSwitches, PolicyParameters, ShaeParameters
     for path in Path("configs").glob("*.json"):
         config = load_config(path)
-        DecodingConfig(**config["generation"])
+        if "generation" in config:
+            DecodingConfig(**config["generation"])
         if "reward" in config:
             settings = dict(config["reward"])
             settings["rars_parameters"] = RARSParameters(**settings["rars_parameters"])
