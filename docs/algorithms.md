@@ -1,52 +1,53 @@
 # Algorithm contracts
 
-Core algorithms for **Risk-aware lesion-grounded reinforcement learning for structured vision–language diagnosis of liver lesions in multi-phase CT**.
+## Structured reward
 
-The functions operate on structured completions, supplied annotations and class metadata, generated-token log probabilities and masks, and fixed visual features.
+Parse all three input phases. A phase without GT lesions is background; an explicit `no-lesion` output is required to receive background credit. Invalid output receives the minimum structured utility, `-(detection_weight + classification_weight)`.
 
-## Modules
+Within each phase, maximize total GIoU in a one-to-one assignment and retain pairs meeting `giou_for_classification`. The same eligible pairs define localization and diagnosis. Let `N` be the GT lesion count, `F` unmatched predictions, `M` unmatched GT lesions, and `D = max(N, 1) + F`.
 
-| Module | Input → output | Paper correspondence |
-| --- | --- | --- |
-| `rewards/schema.py` | JSON completion + ordered classes → lesion records and background phases | Structured output contract |
-| `matching/geometry.py` | Boxes / similarity matrix → IoU, GIoU, maximum-sum one-to-one assignment | Reward matching |
-| `rewards/rars.py` | True/predicted classes + counts + severity prior + completion likelihood → confusion cost | Scarcity × severity × likelihood |
-| `rewards/full_reward.py` | Completion + reference + explicit reward parameters → component scores and clipped reward | RARS reward equations |
-| `rl/core.py` | Scalar clipped rewards + RID/UID + token mask + baseline state → token advantages | SHAE and GRPO replacement |
-| `rl/policy_contract.py` | Current/rollout/reference token log probabilities + advantages + mask → scalar loss | Token-ratio surrogate, dual clipping and KL |
-| `rl/completion_likelihood.py` | Token log probabilities + completion mask → mean NLL and likelihood proxy | Completion-only likelihood |
-| `rl/visual.py` | Three phase patch tensors + masks + fixed projection → unit visual latent | Phase pooling and projection |
-| `rl/curriculum.py` | Visual latents + group reward means → prototypes, reward memory and epoch indices | DA-CVQ / VGS |
-| `rl/workflow.py` | Clipped rewards + RID/UID + UID-to-vector mapping → curriculum updates | Reward-to-memory connection |
-| `aggregation/patient.py` | Parsed lesions → group vote; group votes + NLL → patient diagnosis | Deterministic aggregation |
+- Localization utility: `(sum(matched IoU) - M - F) / D`.
+- Diagnosis utility: `(number correct - sum(normalized error costs) - M - F) / D`.
+- For a background phase, add `+1` to each numerator for an explicit correct background output, otherwise `-1`.
 
-## Inputs and parameters
+RARS error costs retain scarcity × severity × completion-likelihood factors and are divided by the maximum possible cost across the fixed active class space at likelihood one. This shared scale preserves relative risk weights and bounds each diagnostic error by one. RARS-off uses unit error costs. Each component lies in `[-1,1]`; average each component over phases, then apply its positive weight. Clipping bounds must enclose this entire range. Consequently, dropping an eligible wrong diagnosis cannot improve the score, and extra unmatched predictions reduce utility unless it is already minimal. Multi-lesion GT remains in the denominator when predictions omit lesions.
 
-- A structured completion is a JSON object with a `detections` list. Each record has `phase` (`a`, `p`, or `v`), `label`, and numeric `bbox_2d` coordinates `[x1, y1, x2, y2]` on `[0,1000]`. Background uses a unique `no-lesion` record with `[-1,-1,-1,-1]` in that phase. Classes and optional aliases are supplied by the caller.
-- `RewardConfig` and `RARSParameters` require explicit coefficients, clipping bounds, the diagnostic GIoU threshold, and a complete symmetric off-diagonal severity mapping (rows: true class; columns: predicted class). `class_counts` contains training-input-group counts. The appendix's active-class lower-bound rule is applied, and supplied extra keys remain in the total.
-- Localization uses an IoU assignment per phase and divides by its ground-truth lesion count. Diagnostic reward uses a separate GIoU assignment followed by thresholding. Only malformed model completions receive the schema-invalid zero reward; reference and parameter errors raise exceptions.
-- RID identifies one sampled occurrence; UID identifies the persistent input. Repeated occurrences of a UID retain separate rollout groups. Keep the same `ShaeBaselineStore` across visits. SHAE reads the prior baseline, constructs the advantage, then updates the baseline once per RID. Its standard deviations use the population convention; the SHAE-off GRPO replacement uses sample standard deviation.
-- Token log probabilities and binary masks must align. The mask retains generated tokens only. `grpo_token_loss` minimizes the negative surrogate plus KL. For a complete batch, explicitly pass `total_token_count=None`; for microbatches, pass the same full-update token count and sum the losses.
-- `project_visual_latent` takes phase features in arterial, portal-venous, delayed order and a caller-supplied fixed column-orthonormal projection. `DACVQState` takes explicit EMA, diversity, revival, reward-bound and numerical settings. `difficulty_beta` is the inverse sampling temperature. Random draws use supplied generators.
-- `VGSSampler` takes explicit epoch state, missing-vector multiplier and weight floor. Epoch zero with an uninitialized codebook uses a permutation; later epochs use replacement sampling. `use_vgs=False` uses a permutation every epoch.
-- Group votes use all active lesion labels and fixed class-order ties. Patient votes use one vote per eligible group, then mean finite completion NLL and fixed class order for ties. No eligible votes yields `None`.
+Class counts use the entire training manifest and the same class-order majority rule as group inference. They remain fixed across epochs and repeated sampling. They count input groups, not patients.
 
-## Algorithm sequence
+## SHAE and GRPO
 
-1. Use `compute_score` to obtain one clipped `score` per completion. Keep zero rewards from invalid outputs in their rollout groups.
-2. Pass those scalar rewards, RID/UID and response masks to `compute_shae_advantage`, or use `compute_grpo_advantage` with SHAE disabled.
-3. Compute `grpo_token_loss` from the generated-token probabilities, advantages and masks.
-4. After the policy update, call `update_curriculum` with the same clipped rewards and fixed visual vectors. It updates separate code-level reward memory using each RID's mean reward. An explicit `None` vector skips its memory update.
-5. Call `VGSSampler.sample_epoch()` for the next epoch's input positions. At inference, parse completions and apply the two-stage voting functions.
+RID identifies a sampled occurrence; UID identifies its persistent input. Each occurrence has `G >= 2` completions. For reward vector `r`, let `mu = mean(r)` and `s = population_std(r)`:
 
-Function signatures and docstrings specify tensor shapes and state transitions. All experiment-dependent settings are caller inputs.
-
-## Dependencies
-
-Install the dependencies listed in the repository's `requirements.txt`:
-
-```sh
-python -m pip install -r requirements.txt
+```text
+group = (r - mu) / (s + epsilon)
+b = previous_UID_EMA, or mu on first visit
+history = (r - b) / (sqrt(mean((r - b)^2)) + epsilon)
+alpha = sigmoid((s - gate_mid) / gate_temperature)
+advantage = alpha * group + (1 - alpha) * history
 ```
 
-Code is distributed under the MIT License.
+Update the UID baseline once per occurrence after reading it. Both branches have magnitude at most `sqrt(G)`. First-visit equal rewards yield zero advantage. Jitter is disabled (`noise_std=0`), so random noise cannot create the first learning signal. SHAE-off uses the same population-standard-deviation `group` normalization. A historical mean shift can still produce same-sign advantages, with RMS-controlled magnitude.
+
+Every worker receives the global scalar rewards in occurrence order and performs the same UID updates. Repeated UIDs on different workers therefore have deterministic sequential baseline semantics.
+
+## Policy probabilities and objective
+
+RL samples at temperature one, with full support (`top_p=1`, `top_k=0`) and no repetition penalty. Input-only multimodal markers are suppressed. Old, current, and reference policy probabilities use this same fixed suppression and renormalization. Raw model completion NLL is computed separately for the reward's likelihood factor and inference tie-breaking. The first EOS is retained; later padding and all prompt tokens are excluded.
+
+The PPO token-ratio objective includes ratio clipping, negative-advantage dual clipping, and a reference KL term. Rollout tokens, old probabilities, reference probabilities and advantages stay fixed across `policy_updates`. Dropout is disabled; gradient checkpointing is active during differentiable scoring. Each independent multimodal forward reconstructs Qwen3-VL rotary offsets for its own input grid.
+
+Each microbatch contributes a token loss sum divided by the real global token count. The training runtime multiplies by world size once to compensate for ZeRO's averaged gradients. Short final batches use zero-weight work slots to align collectives; those slots never enter reward populations, baselines, curriculum updates or token counts.
+
+## DA-CVQ and sampling
+
+Visual vectors come from the frozen SFT vision encoder: pool phase patches, apply one fixed orthonormal projection, concatenate a/p/v, and normalize. The supplied 384-dimensional phase projection produces 1,152-dimensional vectors.
+
+After policy updates, each real occurrence updates DA-CVQ using its mean clipped reward. All active feature masses and accumulators decay on each update; the assigned code receives the new difficulty-weighted feature. Code-level reward EMA changes only on assignment. Low-mass codes can be revived. UID assignments are recomputed from the current codebook.
+
+With curriculum enabled, epoch zero initializes from a permutation; later epochs use VGS probabilities. `sampling.replacement` explicitly controls later draws. Without curriculum it selects uniform replacement sampling or a uniform permutation, allowing matched sampling controls. Weighted sampling without replacement visits every input once and changes order only. Shared CPU generators and globally ordered updates make curriculum state identical on all workers. Missing visual vectors skip memory updates and use the configured sampling weight.
+
+## Inference and evaluation
+
+Each input group votes by lesion-label majority. Background records do not vote; class-order ties are deterministic. Each group contributes one patient vote. Patient ties use mean finite completion NLL, then class order. Patients without valid votes remain in classification denominators.
+
+Main `detection` statistics count TP/FP/FN across **all input phase slices**, including predictions on background. `detection_positive_only` exposes conditional positive-slice metrics separately. Background FP count, FP per background phase, and FP per patient are reported. Unthresholded class-agnostic mean IoU retains all GT lesions in its denominator. Prediction UIDs must cover the manifest exactly once.

@@ -50,11 +50,11 @@ The `generation` object contains all `DecodingConfig` fields:
 | `suppress_token_ids` | Input-only image/video/vision marker IDs and a distinct non-EOS padding ID excluded from text completions |
 | `use_cache` | Boolean generation cache setting |
 
-The first generated EOS contributes to the completion score; subsequent padding is excluded. NLL uses the model's original logits and excludes prompt tokens. Old, current, and reference policy scores use the same saved token sequences.
+The first generated EOS contributes to the completion score; subsequent padding is excluded. NLL uses original logits and excludes prompt tokens. RL old/current/reference scores additionally share the fixed suppression mask and its renormalization. RL requires temperature=1, top_p=1, top_k=0, repetition_penalty=1 and do_sample=true.
 
 ## SFT and RL training
 
-Run `python -m training.run sft --config ...` or `python -m training.run rl --config ...`.
+Start from `configs/sft_4xa800.json` and `configs/rl_4xa800.json`. Run `bash scripts/train_4gpu.sh sft [config.json]` or `bash scripts/train_4gpu.sh rl [config.json]`. Both launch four workers with torchrun.
 
 Both stages require:
 
@@ -63,16 +63,17 @@ Both stages require:
 | `manifest` | Fitting-manifest path |
 | `output_dir` | Epoch checkpoint output directory |
 | `resume_from` | `null` to start, or an epoch checkpoint directory to continue |
-| `seed` | Python, NumPy, and PyTorch seed |
+| `seed` | Per-worker Python, NumPy and PyTorch seed is seed + rank |
+| `distributed.world_size` | 4 workers on one host |
 | `order_seed` | Dataset-order random stream seed |
 | `deterministic_algorithms` | Boolean passed to PyTorch |
 | `model`, `generation` | Shared objects above |
 | `optimizer` | AdamW: `learning_rate`, `betas` (two numbers), `epsilon`, `weight_decay`, `amsgrad` |
-| `loop` | `epochs` (total target count), `batch_size` (input groups per update), `microbatch_size`, `max_grad_norm` |
+| `loop` | `epochs` (total target count), `batch_size` (global input occurrences per update), `microbatch_size=1`, `max_grad_norm`, `max_sequence_length` |
 
 SFT optimizes assistant completion tokens. `microbatch_size` counts input groups in SFT and completions in RL; each update retains one normalization over its full retained-token population. A partial final batch uses its own token count.
 
-Training uses `model.dtype="float32"` for model parameters and AdamW state, on a `cpu` or `cuda` device. Inference and frozen feature extraction accept all three listed dtypes. Each training process places its model and optimizer on the configured device.
+Training uses BF16 model parameters, FP32 gradient accumulation, and DeepSpeed ZeRO-2 with CPU AdamW master parameters/state. `LOCAL_RANK` selects the CUDA device. Activation checkpointing and dropout-free scoring are enabled. The reference policy is a separate frozen BF16 model. Rollout tensors are cached on CPU. Use the supplied image pixel limits and sequence cap to bound activations. SFT uses a global batch of 128; RL uses four inputs × two completions. The model source revision is immutable; local source weights are fingerprinted for continuation.
 
 RL also requires:
 
@@ -81,21 +82,22 @@ RL also requires:
 | `loop.group_size` | At least two sampled completions per input occurrence |
 | `loop.policy_updates` | Positive number of updates on each fixed rollout batch |
 | `loop.advantage_epsilon` | Positive advantage normalization constant |
+| `sampling.replacement` | Boolean controlling replacement draws; curriculum initialization still uses a permutation |
 | `components` | Booleans `shae`, `rars`, `curriculum` |
 | `policy` | `clip_ratio`, `dual_clip`, `kl_coefficient`, `log_ratio_bound`, `kl_bound` |
 | `reward` | Reward object described below |
-| `shae` | When enabled: `baseline_beta`, `gate_mid`, `gate_temperature`, `noise_std`, `seed` |
+| `shae` | When enabled: `baseline_beta`, `gate_mid`, `gate_temperature`, `noise_std=0`, `seed` |
 | `curriculum` | When enabled: `state`, `state_seed`, `sampling_seed`, `missing_feature_multiplier`, `weight_floor` |
 
 For RL, `model` points to the run's post-SFT checkpoint. A new run loads separate current and frozen reference policies from this source. Continuation loads the current policy from `resume_from` and the reference from the original `model` source. Keep the original source available.
 
-The `reward` object contains `severity_matrix` (true-label rows, predicted-label columns, complete symmetric off-diagonal entries), `rars_parameters` (`scarcity_alpha`, `confidence_eta`, `severity_kappa`, `count_epsilon`), `giou_for_classification`, `detection_weight`, `classification_weight`, `missing_match_penalty`, `clip_min`, and `clip_max`.
+The `reward` object contains `severity_matrix` (true-label rows, predicted-label columns, complete symmetric off-diagonal entries), `rars_parameters` (`scarcity_alpha`, `confidence_eta`, `severity_kappa`, `count_epsilon`), `giou_for_classification`, `detection_weight`, `classification_weight`, `clip_min`, and `clip_max`.
 
 `curriculum.state` contains `max_codes`, `input_dim`, `feature_decay`, `reward_decay`, `difficulty_beta`, `dead_code_threshold`, `dead_code_replace_probability`, `revival_noise_std`, `diversity_threshold`, `reward_min`, `reward_max`, and `mass_epsilon`. `input_dim` equals the vector length; reward bounds equal reward clipping bounds. `difficulty_beta` is inverse sampling temperature.
 
-Each sampled occurrence has its own rollout ID. SHAE maintains a persistent UID baseline. DA-CVQ receives occurrence-level mean clipped rewards after policy optimization and maintains separate code-level memory. SHAE-off uses group-centered sample-standard-deviation GRPO. RARS-off sets error multipliers to one while retaining geometry, correct-class reward, and the missing-match term. Curriculum-off uniformly shuffles every epoch and performs no visual-memory update.
+Each occurrence has its own RID and G completions on one worker. Every worker applies global occurrence-ordered UID baseline and DA-CVQ updates. SHAE uses population Std for group centering and RMS for history residuals; SHAE-off uses the same population Std. RARS-off uses unit diagnostic error costs. `sampling.replacement` controls uniform sampling when curriculum is off.
 
-Epoch directories (`epoch_0001`, `epoch_0002`, ...) contain model/processor files, `training_state.pt`, `training_config.json`, and `training_history.json`. Continuation restores optimizer, SHAE baseline, codebook, sampler epoch, and random streams. The loaded manifest and mathematical configuration identify the run; output directory, continuation path, and total target epoch count may change.
+Epoch directories contain a Hugging Face model/processor, collective ZeRO shards under `zero/`, per-rank state files, `checkpoint.json`, `training_config.json`, and `training_history.json`. A directory is published by atomic rename only after all workers finish writing. Continuation restores optimizer, per-rank RNG, shared CPU generators, UID baseline, codebook and sampler epoch. Keep all files on shared local storage and resume with the same four GPUs/process count. The source model, manifest and mathematical settings identify the run; output directory, continuation path and total target epoch count may change. An interrupted `.incomplete` directory is not a completed checkpoint.
 
 ## Frozen visual vectors
 
@@ -113,4 +115,4 @@ Run `python -m evaluation.evaluate` with `--manifest`, `--predictions`, `--iou-t
 
 Outputs are `metrics.json`, `patient_predictions.jsonl`, and `group_predictions.jsonl`. Patient accuracy and macro precision/recall/F1 use the fixed patient and class populations. Groups vote by lesion-label majority; patient ties use mean finite NLL, then class order. Patients without votes remain in the metrics with undefined predictions.
 
-Detection uses lesion-positive phase slices. CA maximizes total IoU. GFCA filters that same assignment by class agreement. Same-class-first maximizes the number of same-class pairs, then total IoU. Precision/recall/F1 use TP/FP/FN at every threshold. Mean IoU uses unthresholded CA divided by all GT lesions. Acc@IoU>0 uses accepted positive-overlap matches divided by all GT lesions.
+Main detection metrics use every input phase slice. `detection_positive_only` separately reports the positive-slice conditional metrics. `background_false_positives` reports background FP count and burden. CA maximizes total IoU. GFCA filters that same assignment by class agreement. Same-class-first maximizes the number of same-class pairs, then total IoU. Precision/recall/F1 use TP/FP/FN at every threshold. Mean IoU uses unthresholded CA divided by all GT lesions. Acc@IoU>0 uses accepted positive-overlap matches divided by all GT lesions.

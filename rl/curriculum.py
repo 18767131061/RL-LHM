@@ -165,8 +165,10 @@ class DACVQState:
             self.online_init_step(values)
         code, _ = self.quantize(values)
         weight = 1 - (reward - self.reward_min) / (self.reward_max - self.reward_min)
-        mass = self.feature_decay * self.ema_cluster_size[code] + (1 - self.feature_decay) * weight
-        accumulator = self.feature_decay * self.ema_weight[code] + (1 - self.feature_decay) * weight * values
+        self.ema_cluster_size[:self.filled_slots].mul_(self.feature_decay)
+        self.ema_weight[:self.filled_slots].mul_(self.feature_decay)
+        mass = self.ema_cluster_size[code] + (1 - self.feature_decay) * weight
+        accumulator = self.ema_weight[code] + (1 - self.feature_decay) * weight * values
         self.ema_cluster_size[code] = mass
         self.ema_weight[code] = accumulator
         guarded_mean = accumulator / max(float(mass), self.mass_epsilon)
@@ -259,7 +261,7 @@ class VGSSampler:
 
     A new sampler with an uninitialized codebook draws a random permutation.
     Later epochs finalize any nonempty online codebook, then draw exactly N
-    positions with replacement using VGS (or uniform weights while empty).
+    positions using the explicit replacement setting and VGS (or uniform weights while empty).
     ``epoch_count`` is explicit so a resumed sampler need not replay epoch zero.
     """
 
@@ -273,6 +275,7 @@ class VGSSampler:
         generator: torch.Generator,
         use_vgs: bool,
         epoch_count: int,
+        replacement: bool,
     ):
         if isinstance(epoch_count, bool) or not isinstance(epoch_count, int) or epoch_count < 0:
             raise ValueError("epoch_count must be a nonnegative integer")
@@ -283,6 +286,9 @@ class VGSSampler:
         self.generator = _cpu_generator(generator)
         self.use_vgs = use_vgs
         self.epoch_count = epoch_count
+        if type(replacement) is not bool:
+            raise ValueError("replacement must be boolean")
+        self.replacement = replacement
         # Validate VGS settings before a draw can mutate the epoch count.
         self.probabilities()
 
@@ -300,11 +306,13 @@ class VGSSampler:
             return torch.empty(0, dtype=torch.int64)
         if self.use_vgs and self.epoch_count > 0 and not self.state.is_initialized:
             self.state.finalize_initialization()
-        if self.epoch_count == 0 and not self.state.is_initialized:
+        if not self.use_vgs and not self.replacement:
+            sampled = torch.randperm(size, generator=self.generator)
+        elif self.use_vgs and self.epoch_count == 0 and not self.state.is_initialized:
             sampled = torch.randperm(size, generator=self.generator)
         else:
             sampled = torch.multinomial(
-                self.probabilities(), num_samples=size, replacement=True,
+                self.probabilities(), num_samples=size, replacement=self.replacement,
                 generator=self.generator,
             )
         self.epoch_count += 1

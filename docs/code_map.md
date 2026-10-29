@@ -13,7 +13,7 @@
 | `inference/run.py` | Produce keyed completions and completion NLL for every input group |
 | `rewards/schema.py` | Parse lesion/background records under the phase, label, and box contract |
 | `rewards/rars.py` | Compute scarcity, severity, and likelihood-based diagnostic error costs |
-| `rewards/full_reward.py` | Combine localization, diagnostic, and missing-match terms; clip scalar rewards |
+| `rewards/full_reward.py` | Combine bounded localization/diagnosis utilities, including missed GT and unmatched predictions |
 | `matching/geometry.py` | Compute IoU/GIoU and maximum-sum Hungarian assignments |
 | `matching/protocols.py` | Apply CA, geometry-first class-aware, and same-class-first assignment rules |
 | `rl/core.py` | Maintain UID baselines; compute SHAE or GRPO advantages |
@@ -28,3 +28,5 @@
 | `evaluation/evaluate.py` | Align UIDs, retain patient denominators, run protocols, write metrics |
 
 Package `__init__.py` files define public imports or package descriptions. `requirements.txt` specifies dependencies, `CITATION.cff` provides citation metadata, and `LICENSE` provides the MIT license. `README.md` describes the workflow; `docs/configuration.md` defines inputs/settings; `docs/algorithms.md` defines mathematical interfaces. `.gitignore` excludes local Python caches and environments.
+
+`training/distributed.py` owns rank assignment, global reductions, ZeRO-2 CPU offload and accumulation boundaries. `configs/` contains complete four-A800 SFT/RL and feature/inference configurations. `tests/` covers algorithm boundaries, four-process equivalence, model probabilities and checkpoint continuation.

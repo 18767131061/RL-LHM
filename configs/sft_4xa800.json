@@ -1,0 +1,61 @@
+{
+  "manifest": "datasets/train.json",
+  "output_dir": "checkpoints/sft",
+  "resume_from": null,
+  "seed": 42,
+  "order_seed": 1042,
+  "deterministic_algorithms": false,
+  "distributed": {
+    "world_size": 4
+  },
+  "model": {
+    "model_name_or_path": "Qwen/Qwen3-VL-4B-Instruct",
+    "processor_name_or_path": "Qwen/Qwen3-VL-4B-Instruct",
+    "revision": "d1883f3364402876f33f2ce7cfafe737d1e326c7",
+    "device": "cuda",
+    "dtype": "bfloat16",
+    "attn_implementation": "sdpa",
+    "processor_kwargs": {
+      "min_pixels": 65536,
+      "max_pixels": 262144
+    }
+  },
+  "generation": {
+    "max_new_tokens": 512,
+    "do_sample": true,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "num_beams": 1,
+    "eos_token_ids": [
+      151645,
+      151643
+    ],
+    "pad_token_id": 151643,
+    "use_cache": true,
+    "suppress_token_ids": [
+      151652,
+      151653,
+      151655,
+      151656
+    ]
+  },
+  "optimizer": {
+    "learning_rate": 1e-05,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "epsilon": 1e-08,
+    "weight_decay": 0.01,
+    "amsgrad": false
+  },
+  "loop": {
+    "epochs": 6,
+    "batch_size": 128,
+    "microbatch_size": 1,
+    "max_grad_norm": 1.0,
+    "max_sequence_length": 4096
+  }
+}

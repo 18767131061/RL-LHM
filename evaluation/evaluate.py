@@ -91,7 +91,7 @@ def evaluate(
     *,
     iou_thresholds: Sequence[float],
 ) -> dict:
-    """Score all manifest patients and lesion-positive phase slices.
+    """Score all manifest patients and all input phase slices.
 
     Prediction UIDs must cover the manifest records exactly. A schema-invalid
     completion contributes no lesions or diagnostic vote. Patients with no vote,
@@ -153,8 +153,8 @@ def evaluate(
             if not truth:
                 excluded_phases += 1
                 excluded_predictions += len(predicted)
-                continue
-            positive_phases += 1
+            else:
+                positive_phases += 1
             gt_instances += len(truth)
             matrix = box_iou_matrix([item.box for item in truth], [item.box for item in predicted])
             for protocol in PROTOCOLS:
@@ -187,7 +187,25 @@ def evaluate(
             "threshold_rule": "IoU > 0" if threshold == 0 else "IoU >= threshold",
             **total, **binary_detection_metrics(total["tp"], total["fp"], total["fn"]),
         })
+    conditional = {protocol: [] for protocol in PROTOCOLS}
+    for protocol, rows in detection.items():
+        for row in rows:
+            total = {name: row[name] for name in ("tp", "fp", "fn", "gt_instances", "predicted_instances")}
+            total["fp"] -= excluded_predictions
+            total["predicted_instances"] -= excluded_predictions
+            conditional[protocol].append({
+                "iou_threshold": row["iou_threshold"], "threshold_rule": row["threshold_rule"],
+                **total, **binary_detection_metrics(total["tp"], total["fp"], total["fn"]),
+            })
     return {
+        "detection_scope": "all_input_phase_slices",
+        "detection_positive_only": conditional,
+        "background_false_positives": {
+            "count": excluded_predictions,
+            "phase_slices": excluded_phases,
+            "per_background_phase_slice": excluded_predictions / excluded_phases if excluded_phases else 0.0,
+            "per_patient": excluded_predictions / len(patients),
+        },
         "classes": list(classes), "classification": classification, "detection": detection,
         "localization": {
             "mean_iou_class_agnostic": ca_iou_sum / gt_instances if gt_instances else 0.0,
@@ -197,8 +215,7 @@ def evaluate(
                 for protocol in PROTOCOLS
             },
             "positive_phase_slices": positive_phases,
-            "excluded_no_lesion_phase_slices": excluded_phases,
-            "predictions_on_excluded_phases": excluded_predictions,
+            "background_phase_slices": excluded_phases,
         },
         "coverage": {
             "patients": len(patients), "input_groups": len(expected),

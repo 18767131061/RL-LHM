@@ -1,0 +1,151 @@
+{
+  "manifest": "datasets/train_features.json",
+  "output_dir": "checkpoints/rl",
+  "resume_from": null,
+  "seed": 42,
+  "order_seed": 1042,
+  "deterministic_algorithms": false,
+  "distributed": {
+    "world_size": 4
+  },
+  "model": {
+    "model_name_or_path": "checkpoints/sft/epoch_0006",
+    "processor_name_or_path": "checkpoints/sft/epoch_0006",
+    "revision": null,
+    "device": "cuda",
+    "dtype": "bfloat16",
+    "attn_implementation": "sdpa",
+    "processor_kwargs": {
+      "min_pixels": 65536,
+      "max_pixels": 262144
+    }
+  },
+  "generation": {
+    "max_new_tokens": 512,
+    "do_sample": true,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "num_beams": 1,
+    "eos_token_ids": [
+      151645,
+      151643
+    ],
+    "pad_token_id": 151643,
+    "use_cache": true,
+    "suppress_token_ids": [
+      151652,
+      151653,
+      151655,
+      151656
+    ]
+  },
+  "optimizer": {
+    "learning_rate": 1e-06,
+    "betas": [
+      0.9,
+      0.999
+    ],
+    "epsilon": 1e-08,
+    "weight_decay": 0.01,
+    "amsgrad": false
+  },
+  "loop": {
+    "epochs": 6,
+    "batch_size": 4,
+    "microbatch_size": 1,
+    "max_grad_norm": 1.0,
+    "max_sequence_length": 4096,
+    "group_size": 2,
+    "policy_updates": 1,
+    "advantage_epsilon": 1e-06
+  },
+  "components": {
+    "shae": true,
+    "rars": true,
+    "curriculum": true
+  },
+  "sampling": {
+    "replacement": true
+  },
+  "policy": {
+    "clip_ratio": 0.2,
+    "dual_clip": 3.0,
+    "kl_coefficient": 0.01,
+    "log_ratio_bound": 20.0,
+    "kl_bound": 20.0
+  },
+  "reward": {
+    "severity_matrix": {
+      "HCC": {
+        "ICC": 1.1,
+        "FNH": 0.9,
+        "HA_Hemangioma": 0.5,
+        "nodule_CYST": 0.4
+      },
+      "ICC": {
+        "HCC": 1.1,
+        "FNH": 0.4,
+        "HA_Hemangioma": 0.7,
+        "nodule_CYST": 0.4
+      },
+      "FNH": {
+        "HCC": 0.9,
+        "ICC": 0.4,
+        "HA_Hemangioma": 0.4,
+        "nodule_CYST": 0.4
+      },
+      "HA_Hemangioma": {
+        "HCC": 0.5,
+        "ICC": 0.7,
+        "FNH": 0.4,
+        "nodule_CYST": 0.4
+      },
+      "nodule_CYST": {
+        "HCC": 0.4,
+        "ICC": 0.4,
+        "FNH": 0.4,
+        "HA_Hemangioma": 0.4
+      }
+    },
+    "rars_parameters": {
+      "scarcity_alpha": 0.35,
+      "confidence_eta": 0.75,
+      "severity_kappa": 0.5,
+      "count_epsilon": 1e-06
+    },
+    "giou_for_classification": 0.3,
+    "detection_weight": 1.0,
+    "classification_weight": 1.0,
+    "clip_min": -2.0,
+    "clip_max": 2.0
+  },
+  "shae": {
+    "baseline_beta": 0.95,
+    "gate_mid": 0.05,
+    "gate_temperature": 0.015,
+    "noise_std": 0.0,
+    "seed": 2042
+  },
+  "curriculum": {
+    "state_seed": 3042,
+    "sampling_seed": 4042,
+    "missing_feature_multiplier": 0.5,
+    "weight_floor": 1e-08,
+    "state": {
+      "max_codes": 64,
+      "input_dim": 1152,
+      "feature_decay": 0.95,
+      "reward_decay": 0.9,
+      "difficulty_beta": 3.0,
+      "dead_code_threshold": 0.25,
+      "dead_code_replace_probability": 0.3,
+      "revival_noise_std": 0.001,
+      "diversity_threshold": 0.85,
+      "reward_min": -2.0,
+      "reward_max": 2.0,
+      "mass_epsilon": 1e-08
+    }
+  }
+}

@@ -105,7 +105,7 @@ def load_manifest(path: str | Path) -> Manifest:
 
 
 def training_class_counts(manifest: Manifest) -> dict[str, int]:
-    """Count positive training groups by dominant GT label, with lexical ties.
+    """Count positive training groups using the inference class-order tie rule.
 
     Each group contributes once. A background-only group contributes no count.
     Only observed dominant labels are keys in the returned dictionary.
@@ -115,6 +115,6 @@ def training_class_counts(manifest: Manifest) -> dict[str, int]:
         parsed = parse_completion(record["ground_truth"], manifest.classes)
         labels = Counter(detection.label for detection in parsed.detections)
         if labels:
-            label = max(labels, key=lambda item: (labels[item], item))
+            label = max(manifest.classes, key=lambda item: labels[item])
             counts[label] += 1
     return dict(counts)

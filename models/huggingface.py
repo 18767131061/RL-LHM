@@ -95,6 +95,9 @@ class HuggingFaceBackend:
         if getattr(model.config, "is_encoder_decoder", False):
             raise ValueError("The backend requires a causal image/text decoder")
         self.model = model
+        self.forward_model = model
+        self.policy_scoring = False
+        self.max_sequence_length = None
         self.processor = processor
         self.generation = generation
         self.processor.tokenizer.padding_side = "left"
@@ -172,22 +175,42 @@ class HuggingFaceBackend:
                                    dtype=self.model.dtype if value.is_floating_point() else value.dtype)
         return inputs
 
-    def _token_log_probabilities(self, inputs: Mapping[str, torch.Tensor]) -> torch.Tensor:
-        outputs = self.model(**inputs, use_cache=False, return_dict=True)
-        logits = outputs.logits[:, :-1].float()
+    def _move_inputs(self, inputs):
+        return {key: value.to(device=self.model.device,
+                             dtype=self.model.dtype if value.is_floating_point() else value.dtype)
+                for key, value in inputs.items()}
+
+    def _token_log_probabilities(self, inputs: Mapping[str, torch.Tensor], *, policy=False) -> torch.Tensor:
+        inputs = self._move_inputs(inputs)
+        if self.max_sequence_length is not None and inputs["input_ids"].shape[1] > self.max_sequence_length:
+            raise ValueError("Encoded sequence exceeds max_sequence_length; reduce image tokens or prompt length")
+        # Qwen3-VL caches multimodal rope_deltas on its inner model. Every new
+        # teacher-forced sequence must reconstruct these from its own image grid.
+        inner = getattr(self.model, "model", None)
+        if inner is not None and hasattr(inner, "rope_deltas"):
+            inner.rope_deltas = None
+        forward = self.forward_model if torch.is_grad_enabled() else self.model
+        outputs = forward(**inputs, use_cache=False, return_dict=True)
+        logits = outputs.logits[:, :-1]
         targets = inputs["input_ids"][:, 1:]
         if logits.shape[:2] != targets.shape:
             raise ValueError("Model logits must align with every next-token target")
-        return logits.log_softmax(dim=-1).gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+        # Chunk the vocabulary projection output in time; avoid a second full
+        # [batch, sequence, vocabulary] FP32 allocation.
+        values = []
+        for start in range(0, targets.shape[1], 64):
+            scores = logits[:, start:start + 64].float()
+            if policy:
+                scores = scores.clone()
+                scores[..., list(self.generation.suppress_token_ids)] = -torch.inf
+            labels = targets[:, start:start + 64]
+            selected = scores.gather(-1, labels.unsqueeze(-1)).squeeze(-1)
+            values.append(selected - scores.logsumexp(dim=-1))
+        return torch.cat(values, dim=1)
 
     def log_probabilities(self, batch: RolloutBatch) -> torch.Tensor:
         """Evaluate the saved rollout tokens with gradients for this model."""
-        inputs = {
-            key: value.to(device=self.model.device,
-                          dtype=self.model.dtype if value.is_floating_point() else value.dtype)
-            for key, value in batch.model_inputs.items()
-        }
-        return self._token_log_probabilities(inputs)
+        return self._token_log_probabilities(batch.model_inputs, policy=self.policy_scoring)
 
     def sft_loss(self, records: Sequence[Mapping]) -> torch.Tensor:
         """Mean next-token NLL of assistant targets through their first EOS."""
@@ -196,6 +219,11 @@ class HuggingFaceBackend:
 
     def sft_loss_sum(self, records: Sequence[Mapping]) -> tuple[torch.Tensor, int]:
         """Sum target NLL and count tokens for full-batch microbatch normalization."""
+        inputs, mask = self.prepare_sft(records)
+        return self.sft_prepared_loss_sum(inputs, mask), int(mask.sum())
+
+    def prepare_sft(self, records: Sequence[Mapping]):
+        """Encode once and retain CPU inputs/masks before global token counting."""
         prompts = self._encode(records, supervised=False)
         inputs = self._encode(records, supervised=True)
         mask = torch.zeros_like(inputs["attention_mask"][:, 1:], dtype=torch.bool)
@@ -208,8 +236,11 @@ class HuggingFaceBackend:
             retained = _through_first_eos(suffix, self.generation.eos_token_ids)
             start = inputs["input_ids"].shape[1] - len(full) + len(prompt) - 1
             mask[row, start:start + len(suffix)] = retained
+        return {key: value.cpu() for key, value in inputs.items()}, mask.cpu()
+
+    def sft_prepared_loss_sum(self, inputs, mask):
         log_probs = self._token_log_probabilities(inputs)
-        return -log_probs[mask].sum(), int(mask.sum().item())
+        return -log_probs[mask.to(log_probs.device)].sum()
 
     @torch.no_grad()
     def generate(self, records: Sequence[Mapping]) -> RolloutBatch:
@@ -219,7 +250,14 @@ class HuggingFaceBackend:
         try:
             inputs = self._encode(records, supervised=False)
             prefix_width = inputs["input_ids"].shape[1]
-            sequences = self.model.generate(**inputs, generation_config=self.generation.as_transformers())
+            if (self.max_sequence_length is not None
+                    and prefix_width + self.generation.max_new_tokens > self.max_sequence_length):
+                raise ValueError("Prompt plus generation budget exceeds max_sequence_length")
+            inner = getattr(self.model, "model", None)
+            if inner is not None and hasattr(inner, "rope_deltas"):
+                inner.rope_deltas = None
+            sequences = self.model.generate(**inputs, generation_config=self.generation.as_transformers(),
+                                            synced_gpus=False)
             generated = sequences[:, prefix_width:]
             if generated.shape[1] == 0:
                 raise ValueError("Generation returned no completion tokens")
@@ -236,8 +274,10 @@ class HuggingFaceBackend:
                     ], dim=1)
             mask = torch.zeros_like(sequences[:, 1:], dtype=torch.bool)
             mask[:, prefix_width - 1:] = retained
-            old_log_probs = self._token_log_probabilities(complete_inputs).detach()
-            nlls = [float(-old_log_probs[row][mask[row]].double().mean().item())
+            raw_log_probs = self._token_log_probabilities(complete_inputs).detach()
+            old_log_probs = (self._token_log_probabilities(complete_inputs, policy=True).detach()
+                             if self.policy_scoring else raw_log_probs)
+            nlls = [float(-raw_log_probs[row][mask[row]].double().mean().item())
                     for row in range(len(records))]
             texts = self.processor.batch_decode(
                 [tokens[keep] for tokens, keep in zip(generated, retained)],
@@ -246,6 +286,22 @@ class HuggingFaceBackend:
             return RolloutBatch(list(texts), complete_inputs, mask, old_log_probs, nlls)
         finally:
             self.model.train(training)
+
+    def enable_training(self, max_sequence_length: int):
+        self.max_sequence_length = max_sequence_length
+        self.model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+        self.model.config.use_cache = False
+        for module in self.model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                module.p = 0.0
+            if isinstance(getattr(module, "attention_dropout", None), (int, float)):
+                module.attention_dropout = 0.0
+        for config in (self.model.config, getattr(self.model.config, "text_config", None),
+                       getattr(self.model.config, "vision_config", None)):
+            if config is not None:
+                for name in ("attention_dropout", "hidden_dropout_prob", "dropout"):
+                    if hasattr(config, name):
+                        setattr(config, name, 0.0)
 
     def save_pretrained(self, path: str | Path) -> None:
         """Save model and processor together as a Hugging Face checkpoint."""

@@ -88,16 +88,12 @@ def compute_shae_advantage(
     epsilon: float,
     generator: torch.Generator | None,
 ) -> torch.Tensor:
-    """Apply the paper's SHAE equations and update one EMA per rollout group.
+    """Mix group-centered Std normalization with history-residual RMS.
 
-    ``rewards`` contains one clipped RARS reward per completion. ``index``
-    contains rollout-group IDs; ``sample_index`` contains persistent input
-    UIDs. Both standard deviations use the population convention (G divisor).
-    The previous baseline is read before the group update, and jitter is added
-    before the EMA branch's standard deviation without re-centering that branch.
-    All mathematical settings are caller supplied. A supplied generator must
-    match the rewards' device; ``None`` explicitly uses Torch's global RNG.
-    Returned advantages are detached and zero on excluded response tokens.
+    Both branches use population moments. RMS bounds historical offsets without
+    dividing them by near-zero within-group variance. No jitter is injected:
+    first-visit equal rewards carry zero information and yield zero advantage.
+    The legacy noise_std argument must be zero.
     """
     scores, mask = _advantage_inputs(rewards, response_mask, index, epsilon)
     groups = rollout_groups(index, sample_index)
@@ -105,8 +101,8 @@ def compute_shae_advantage(
         raise TypeError("store must be a persistent ShaeBaselineStore")
     if not all(math.isfinite(value) for value in (gate_mid, gate_temperature, noise_std)):
         raise ValueError("gate and noise parameters must be finite")
-    if gate_temperature <= 0 or noise_std < 0:
-        raise ValueError("gate_temperature must be positive and noise_std nonnegative")
+    if gate_temperature <= 0 or noise_std != 0:
+        raise ValueError("gate_temperature must be positive and noise_std must be zero")
     outcome = torch.zeros_like(scores)
     for sample_key, positions in groups:
         position_tensor = torch.tensor(positions, device=scores.device, dtype=torch.long)
@@ -117,12 +113,7 @@ def compute_shae_advantage(
         previous = store.get(sample_key)
         baseline = float(mean.item()) if previous is None else previous
         ema_raw = sample_scores - baseline
-        if noise_std > 0:
-            ema_raw = ema_raw + noise_std * torch.randn(
-                ema_raw.shape, dtype=ema_raw.dtype, device=ema_raw.device,
-                generator=generator,
-            )
-        ema_advantage = ema_raw / (ema_raw.std(unbiased=False) + epsilon)
+        ema_advantage = ema_raw / (ema_raw.square().mean().sqrt() + epsilon)
         alpha = torch.sigmoid((standard_deviation - gate_mid) / gate_temperature)
         outcome.index_copy_(0, position_tensor, alpha * group_advantage + (1 - alpha) * ema_advantage)
         store.update(sample_key, float(mean.item()))
@@ -137,19 +128,19 @@ def compute_grpo_advantage(
     *,
     epsilon: float,
 ) -> torch.Tensor:
-    """SHAE-off group normalization using sample Std (G-1 divisor).
+    """SHAE-off group normalization using population Std (G divisor).
 
-    Each group must contain G > 1 completions, as in the paper's replacement.
+    Each group must contain G > 1 completions.
     This function has no baseline state and performs no EMA or RNG updates.
     """
     scores, mask = _advantage_inputs(rewards, response_mask, index, epsilon)
     groups = rollout_groups(index, index)
     if any(len(positions) < 2 for _, positions in groups):
-        raise ValueError("sample-standard-deviation GRPO requires at least two completions per group")
+        raise ValueError("GRPO requires at least two completions per group")
     outcome = torch.zeros_like(scores)
     for _, positions in groups:
         position_tensor = torch.tensor(positions, device=scores.device, dtype=torch.long)
         sample_scores = scores.index_select(0, position_tensor)
-        advantage = (sample_scores - sample_scores.mean()) / (sample_scores.std(unbiased=True) + epsilon)
+        advantage = (sample_scores - sample_scores.mean()) / (sample_scores.std(unbiased=False) + epsilon)
         outcome.index_copy_(0, position_tensor, advantage)
     return outcome.unsqueeze(-1) * mask

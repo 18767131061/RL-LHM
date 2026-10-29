@@ -1,11 +1,11 @@
-"""Single-process supervised and grouped reinforcement-learning loops."""
+"""Globally normalized SFT and grouped RL with equal distributed work slots."""
 
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import Any, Protocol
+from typing import Any
 
 import torch
 
@@ -14,14 +14,6 @@ from rl import (
     ShaeBaselineStore, VGSSampler, compute_grpo_advantage,
     compute_shae_advantage, grpo_token_loss, update_curriculum,
 )
-
-
-class ModelBackend(Protocol):
-    model: torch.nn.Module
-
-    def sft_loss_sum(self, records: Sequence[Mapping[str, Any]]) -> tuple[torch.Tensor, int]: ...
-    def generate(self, records: Sequence[Mapping[str, Any]]) -> Any: ...
-    def log_probabilities(self, rollout: Any) -> torch.Tensor: ...
 
 
 @dataclass(frozen=True)
@@ -44,8 +36,8 @@ class ShaeParameters:
     def __post_init__(self):
         if not all(math.isfinite(x) for x in (self.gate_mid, self.gate_temperature, self.noise_std)):
             raise ValueError("SHAE settings must be finite")
-        if self.gate_temperature <= 0 or self.noise_std < 0:
-            raise ValueError("SHAE temperature must be positive and noise scale nonnegative")
+        if self.gate_temperature <= 0 or self.noise_std != 0:
+            raise ValueError("SHAE temperature must be positive and noise scale zero")
 
 
 @dataclass(frozen=True)
@@ -81,168 +73,94 @@ def _records(records: Sequence[Mapping[str, Any]]):
         raise ValueError("training records must have unique nonempty string UIDs")
 
 
-def _backward(loss):
-    if loss.ndim != 0 or not loss.requires_grad or not torch.isfinite(loss):
-        raise ValueError("training loss must be a finite differentiable scalar")
-    loss.backward()
-
-
-def _optimizer_step(backend, optimizer, max_grad_norm, denominator):
-    for parameter in backend.model.parameters():
-        if parameter.grad is not None:
-            parameter.grad.div_(denominator)
-    norm = torch.nn.utils.clip_grad_norm_(
-        [parameter for parameter in backend.model.parameters() if parameter.requires_grad],
-        max_grad_norm, error_if_nonfinite=True,
-    )
-    optimizer.step()
-    optimizer.zero_grad(set_to_none=True)
-    return float(norm.detach())
-
-
-def _loop_settings(epochs, batch_size, max_grad_norm):
+def _loop_settings(epochs, start_epoch, batch_size, microbatch_size, max_grad_norm):
     _positive_integer("epochs", epochs)
     _positive_integer("batch_size", batch_size)
+    if microbatch_size != 1:
+        raise ValueError("training microbatch_size must be 1; batch_size is the global accumulation batch")
+    if type(start_epoch) is not int or not 0 <= start_epoch <= epochs:
+        raise ValueError("start_epoch must lie between zero and epochs")
     if not math.isfinite(max_grad_norm) or max_grad_norm <= 0:
         raise ValueError("max_grad_norm must be finite and positive")
 
 
-def fit_sft(
-    backend: ModelBackend,
-    records: Sequence[Mapping[str, Any]],
-    *,
-    optimizer: torch.optim.Optimizer,
-    epochs: int,
-    start_epoch: int,
-    batch_size: int,
-    microbatch_size: int,
-    max_grad_norm: float,
-    generator: torch.Generator,
-    on_epoch: Callable[[int, list[dict[str, float | int]]], None] | None,
-) -> list[dict[str, float | int]]:
-    """Fit assistant completion tokens, shuffling input records each epoch.
-
-    The backend constructs the multimodal inputs and completion-only targets.
-    ``batch_size`` is the optimizer's input batch; ``microbatch_size`` is the
-    number of inputs per forward pass. Gradients are accumulated from token-NLL
-    sums and divided by the full batch's retained-token count before the step.
-    An epoch callback can save the model and metrics after its final update.
-    """
+def fit_sft(backend, records, *, runtime, epochs, start_epoch, batch_size,
+            microbatch_size, max_grad_norm, generator, on_epoch):
+    """Accumulate token sums over the global batch, including unpadded tails."""
     _records(records)
-    _loop_settings(epochs, batch_size, max_grad_norm)
-    _positive_integer("microbatch_size", microbatch_size)
-    if type(start_epoch) is not int or not 0 <= start_epoch <= epochs:
-        raise ValueError("start_epoch must be an integer between zero and epochs")
-    if generator.device.type != "cpu":
-        raise ValueError("the dataset-order generator must use CPU")
+    _loop_settings(epochs, start_epoch, batch_size, microbatch_size, max_grad_norm)
     history = []
     for epoch in range(start_epoch, epochs):
-        backend.model.train()
         order = torch.randperm(len(records), generator=generator).tolist()
         for step, start in enumerate(range(0, len(order), batch_size)):
             batch = [records[i] for i in order[start:start + batch_size]]
-            optimizer.zero_grad(set_to_none=True)
-            loss_sum, token_count = 0.0, 0
-            for offset in range(0, len(batch), microbatch_size):
-                total, count = backend.sft_loss_sum(batch[offset:offset + microbatch_size])
-                _positive_integer("retained target tokens", count)
-                _backward(total)
-                loss_sum += float(total.detach())
-                token_count += count
-            norm = _optimizer_step(backend, optimizer, max_grad_norm, token_count)
-            history.append({
-                "epoch": epoch, "step": step, "loss": loss_sum / token_count,
-                "gradient_norm": norm, "input_count": len(batch),
-                "retained_tokens": token_count,
-            })
+            prepared = [(backend.prepare_sft([record]), real)
+                        for _, record, real in runtime.slots(batch)]
+            count = int(runtime.sum(sum(int(mask.sum()) for (_, mask), real in prepared if real)))
+            _positive_integer("global retained tokens", count)
+            runtime.begin(len(prepared))
+            backend.model.train()
+            total_loss = 0.0
+            for index, ((inputs, mask), real) in enumerate(prepared):
+                runtime.boundary(index == len(prepared) - 1)
+                total = backend.sft_prepared_loss_sum(inputs, mask) * int(real)
+                runtime.backward(total / count)
+                total_loss += float(total.detach())
+            norm = runtime.step(max_grad_norm)
+            history.append(dict(epoch=epoch, step=step, loss=runtime.sum(total_loss) / count,
+                                gradient_norm=norm, input_count=len(batch), retained_tokens=count))
         if on_epoch is not None:
             on_epoch(epoch, history)
     return history
 
 
-def fit_rl(
-    backend: ModelBackend,
-    reference: ModelBackend,
-    records: Sequence[Mapping[str, Any]],
-    *,
-    optimizer: torch.optim.Optimizer,
-    epochs: int,
-    start_epoch: int,
-    batch_size: int,
-    microbatch_size: int,
-    group_size: int,
-    policy_updates: int,
-    max_grad_norm: float,
-    advantage_epsilon: float,
-    switches: ComponentSwitches,
-    policy: PolicyParameters,
-    reward_config: RewardConfig,
-    class_counts: Mapping[str, int],
-    baseline_store: ShaeBaselineStore | None,
-    shae_parameters: ShaeParameters | None,
-    curriculum_sampler: VGSSampler | None,
-    visual_vectors: Mapping[str, torch.Tensor | None],
-    order_generator: torch.Generator,
-    shae_generator: torch.Generator | None,
-    on_epoch: Callable[[int, list[dict[str, float | int]]], None] | None,
-) -> list[dict[str, float | int]]:
-    """Optimize all eight SHAE/RARS/curriculum component combinations.
+def _cpu_rollout(rollout):
+    # Rollouts are reused across policy updates. Cache image tensors, masks and
+    # old/reference scores in host memory instead of growing GPU residency.
+    rollout.model_inputs = {key: value.cpu() for key, value in rollout.model_inputs.items()}
+    rollout.response_mask = rollout.response_mask.cpu()
+    rollout.old_log_probabilities = rollout.old_log_probabilities.cpu()
+    return rollout
 
-    Each sampled occurrence has its own RID and G completions. The old-policy
-    token log probabilities are fixed throughout its policy updates. The
-    post-SFT reference stays frozen. Evaluation mode is used for generation,
-    old/reference scoring, and differentiable current-policy scoring so dropout
-    does not change the probability model between these operations.
 
-    SHAE updates its UID baseline once when advantages are constructed. After
-    all policy updates for the batch, each occurrence's mean clipped reward
-    updates DA-CVQ. The next epoch's VGS draws use this separate visual memory.
-    ``batch_size`` counts sampled input occurrences; ``microbatch_size`` counts
-    completions per generation/forward pass. All policy microbatches use the
-    same full-update retained-token denominator and one optimizer step.
+def fit_rl(backend, reference, records, *, runtime, epochs, start_epoch, batch_size,
+           microbatch_size, group_size, policy_updates, max_grad_norm, advantage_epsilon,
+           switches, policy, reward_config, class_counts, baseline_store, shae_parameters,
+           curriculum_sampler, visual_vectors, order_generator, shae_generator, on_epoch,
+           sampling_replacement):
+    """Keep each G-completion occurrence on one rank; synchronize scalar rewards.
+
+    Every worker processes gathered rewards in global occurrence order. Thus
+    repeated UIDs update the same baseline and codebook, independent of their
+    worker assignment. Padding slots participate in collectives but never enter
+    rewards, state updates, metric populations or token denominators.
     """
     _records(records)
-    _loop_settings(epochs, batch_size, max_grad_norm)
-    _positive_integer("microbatch_size", microbatch_size)
-    if type(start_epoch) is not int or not 0 <= start_epoch <= epochs:
-        raise ValueError("start_epoch must be an integer between zero and epochs")
-    _positive_integer("group_size", group_size)
+    _loop_settings(epochs, start_epoch, batch_size, microbatch_size, max_grad_norm)
     _positive_integer("policy_updates", policy_updates)
-    if group_size < 2:
+    if type(group_size) is not int or group_size < 2:
         raise ValueError("group_size must be at least two")
     if not math.isfinite(advantage_epsilon) or advantage_epsilon <= 0:
-        raise ValueError("advantage_epsilon must be finite and positive")
-    if order_generator.device.type != "cpu":
-        raise ValueError("the dataset-order generator must use CPU")
+        raise ValueError("advantage_epsilon must be positive")
     if switches.shae and (baseline_store is None or shae_parameters is None):
-        raise ValueError("SHAE requires its baseline store and parameters")
+        raise ValueError("SHAE requires a UID baseline and parameters")
     if switches.curriculum != (curriculum_sampler is not None):
-        raise ValueError("provide a curriculum sampler exactly when curriculum is enabled")
-    if switches.curriculum:
-        if not curriculum_sampler.use_vgs or len(curriculum_sampler.vectors) != len(records):
-            raise ValueError("the enabled VGS sampler must align with the training records")
+        raise ValueError("curriculum switch and sampler must agree")
+    if curriculum_sampler is not None:
         if curriculum_sampler.epoch_count != start_epoch:
-            raise ValueError("the VGS sampler epoch must equal start_epoch")
+            raise ValueError("sampler epoch must equal start_epoch")
+        if len(curriculum_sampler.vectors) != len(records):
+            raise ValueError("sampler vectors must align with training records")
+        if (curriculum_sampler.state.reward_min != reward_config.clip_min
+                or curriculum_sampler.state.reward_max != reward_config.clip_max):
+            raise ValueError("curriculum and reward bounds must agree")
         for record, vector in zip(records, curriculum_sampler.vectors):
-            uid = record["uid"]
-            if uid not in visual_vectors:
-                raise ValueError("each training UID needs an explicit visual vector or None")
-            expected = visual_vectors[uid]
-            if (vector is None) != (expected is None):
-                raise ValueError("sampler and curriculum-update vectors must have identical UID alignment")
-            if vector is not None and not torch.allclose(vector, curriculum_sampler.state.normalize(expected)):
-                raise ValueError("sampler and curriculum-update vectors must agree")
-        state = curriculum_sampler.state
-        if state.reward_min != reward_config.clip_min or state.reward_max != reward_config.clip_max:
-            raise ValueError("reward and curriculum clipping bounds must agree")
+            expected = visual_vectors[record["uid"]]
+            if ((vector is None) != (expected is None)
+                    or vector is not None and not torch.allclose(vector, curriculum_sampler.state.normalize(expected))):
+                raise ValueError("sampler and curriculum-update features must agree")
     if backend.model is reference.model:
-        raise ValueError("current and reference policies must be distinct models")
-    current_storage = {(p.device, p.data_ptr()) for p in backend.model.parameters()}
-    if any((p.device, p.data_ptr()) in current_storage for p in reference.model.parameters()):
-        raise ValueError("current and reference parameters must not share storage")
-    reference_parameters = {id(p) for p in reference.model.parameters()}
-    if any(id(p) in reference_parameters for group in optimizer.param_groups for p in group["params"]):
-        raise ValueError("optimizer must not contain reference-policy parameters")
+        raise ValueError("reference must be a separate frozen model")
     reference.model.requires_grad_(False)
     reference.model.eval()
     config = replace(reward_config, rars_enabled=switches.rars)
@@ -250,83 +168,72 @@ def fit_rl(
     for epoch in range(start_epoch, epochs):
         if curriculum_sampler is not None:
             order = curriculum_sampler.sample_epoch().tolist()
+        elif sampling_replacement:
+            order = torch.randint(len(records), (len(records),), generator=order_generator).tolist()
         else:
             order = torch.randperm(len(records), generator=order_generator).tolist()
         for step, start in enumerate(range(0, len(order), batch_size)):
             sampled = [records[i] for i in order[start:start + batch_size]]
-            expanded, rollout_ids, input_uids = [], [], []
-            for occurrence, record in enumerate(sampled):
-                expanded.extend([record] * group_size)
-                rollout_ids.extend([f"{epoch}:{step}:{occurrence}"] * group_size)
-                input_uids.extend([record["uid"]] * group_size)
+            chunks, local_scores = [], []
             backend.model.eval()
-            chunks, scores, masks = [], [], []
             with torch.no_grad():
-                for offset in range(0, len(expanded), microbatch_size):
-                    inputs = expanded[offset:offset + microbatch_size]
-                    rollout = backend.generate(inputs)
-                    old = rollout.old_log_probabilities.detach()
-                    mask = rollout.response_mask
-                    if len(rollout.texts) != len(inputs) or len(rollout.completion_nlls) != len(inputs):
-                        raise ValueError("generation must return one completion per expanded record")
-                    if old.shape != mask.shape or old.ndim != 2 or old.shape[0] != len(inputs):
-                        raise ValueError("generated token probabilities and masks must align with completions")
-                    if not torch.all((mask == 0) | (mask == 1)) or not mask.bool().any(dim=1).all():
-                        raise ValueError("each completion must retain generated tokens in a binary mask")
-                    scores.extend(
-                        compute_score(
-                            text, record["ground_truth"], completion_nll=float(nll),
-                            class_counts=class_counts, config=config,
-                        )["score"]
-                        for record, text, nll in zip(inputs, rollout.texts, rollout.completion_nlls)
-                    )
-                    reference_logp = reference.log_probabilities(rollout).detach()
-                    chunks.append((offset, rollout, old, reference_logp))
-                    masks.extend(mask.unbind(0))
-                mask = torch.nn.utils.rnn.pad_sequence(masks, batch_first=True)
-                rewards = torch.tensor(scores, dtype=torch.float32, device=mask.device)
-                if switches.shae:
-                    advantages = compute_shae_advantage(
-                        rewards, mask, rollout_ids, sample_index=input_uids,
-                        store=baseline_store, gate_mid=shae_parameters.gate_mid,
-                        gate_temperature=shae_parameters.gate_temperature,
-                        noise_std=shae_parameters.noise_std,
-                        epsilon=advantage_epsilon, generator=shae_generator,
-                    )
-                else:
-                    advantages = compute_grpo_advantage(
-                        rewards, mask, rollout_ids, epsilon=advantage_epsilon,
-                    )
-            count = int(mask.sum().item())
+                for position, record, real in runtime.slots(sampled):
+                    for member in range(group_size):
+                        rollout = backend.generate([record])
+                        score = compute_score(rollout.texts[0], record["ground_truth"],
+                                              completion_nll=rollout.completion_nlls[0],
+                                              class_counts=class_counts, config=config)["score"]
+                        ref = reference.log_probabilities(rollout).detach().cpu()
+                        rollout = _cpu_rollout(rollout)
+                        ordinal = position * group_size + member
+                        chunks.append((ordinal, rollout, ref, real))
+                        if real:
+                            local_scores.append((ordinal, score))
+            scored = sorted(item for shard in runtime.gather(local_scores) for item in shard)
+            if [ordinal for ordinal, _ in scored] != list(range(len(sampled) * group_size)):
+                raise ValueError("distributed rollout population is not complete and unique")
+            rewards = torch.tensor([score for _, score in scored], dtype=torch.float32)
+            rids = [f"{epoch}:{step}:{position}" for position in range(len(sampled)) for _ in range(group_size)]
+            uids = [record["uid"] for record in sampled for _ in range(group_size)]
+            mask = torch.ones(len(rewards), 1)
+            if switches.shae:
+                advantages = compute_shae_advantage(
+                    rewards, mask, rids, sample_index=uids, store=baseline_store,
+                    gate_mid=shae_parameters.gate_mid, gate_temperature=shae_parameters.gate_temperature,
+                    noise_std=shae_parameters.noise_std, epsilon=advantage_epsilon, generator=shae_generator)
+            else:
+                advantages = compute_grpo_advantage(rewards, mask, rids, epsilon=advantage_epsilon)
+            count = int(runtime.sum(sum(int(rollout.response_mask.sum()) for _, rollout, _, real in chunks if real)))
+            _positive_integer("global retained tokens", count)
             for update in range(policy_updates):
-                backend.model.eval()
-                optimizer.zero_grad(set_to_none=True)
+                # Dropout is disabled in enable_training; train mode activates
+                # non-reentrant gradient checkpointing without changing policy.
+                backend.model.train()
+                runtime.begin(len(chunks))
                 total_loss = 0.0
-                for offset, rollout, old, reference_logp in chunks:
+                for index, (ordinal, rollout, reference_logp, real) in enumerate(chunks):
+                    runtime.boundary(index == len(chunks) - 1)
                     current = backend.log_probabilities(rollout)
-                    chunk_advantage = advantages[offset:offset + old.shape[0], :old.shape[1]]
+                    response_mask = rollout.response_mask.to(current.device)
+                    advantage = advantages[ordinal if real else 0].to(current.device)
+                    # Sum first: dummy completion length may exceed the entire
+                    # real population on a short final batch.
+                    tokens = int(response_mask.sum())
                     loss = grpo_token_loss(
-                        current, old, reference_logp, chunk_advantage, rollout.response_mask,
+                        current, rollout.old_log_probabilities.to(current.device),
+                        reference_logp.to(current.device), advantage, response_mask,
                         clip_ratio=policy.clip_ratio, dual_clip=policy.dual_clip,
-                        kl_coefficient=policy.kl_coefficient,
-                        log_ratio_bound=policy.log_ratio_bound, kl_bound=policy.kl_bound,
-                        total_token_count=count,
-                    )
-                    _backward(loss)
+                        kl_coefficient=policy.kl_coefficient, log_ratio_bound=policy.log_ratio_bound,
+                        kl_bound=policy.kl_bound, total_token_count=tokens) * (tokens * int(real) / count)
+                    runtime.backward(loss)
                     total_loss += float(loss.detach())
-                norm = _optimizer_step(backend, optimizer, max_grad_norm, 1)
-                history.append({
-                    "epoch": epoch, "step": step, "policy_update": update,
-                    "loss": total_loss, "gradient_norm": norm,
-                    "mean_reward": float(rewards.mean()),
-                    "input_count": len(sampled), "completion_count": len(expanded),
-                    "retained_tokens": count,
-                })
+                norm = runtime.step(max_grad_norm)
+                history.append(dict(epoch=epoch, step=step, policy_update=update,
+                                    loss=runtime.sum(total_loss), gradient_norm=norm,
+                                    mean_reward=float(rewards.mean()), input_count=len(sampled),
+                                    completion_count=len(rewards), retained_tokens=count))
             if curriculum_sampler is not None:
-                update_curriculum(
-                    curriculum_sampler.state, rewards, rollout_ids,
-                    input_uids, visual_vectors,
-                )
+                update_curriculum(curriculum_sampler.state, rewards, rids, uids, visual_vectors)
         if on_epoch is not None:
             on_epoch(epoch, history)
     return history

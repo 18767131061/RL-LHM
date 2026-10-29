@@ -1,0 +1,39 @@
+{
+  "manifest": "datasets/test.json",
+  "output": "predictions/test.jsonl",
+  "batch_size": 1,
+  "seed": 42,
+  "model": {
+    "model_name_or_path": "checkpoints/rl/epoch_0006",
+    "processor_name_or_path": "checkpoints/rl/epoch_0006",
+    "revision": null,
+    "device": "cuda:0",
+    "dtype": "bfloat16",
+    "attn_implementation": "sdpa",
+    "processor_kwargs": {
+      "min_pixels": 65536,
+      "max_pixels": 262144
+    }
+  },
+  "generation": {
+    "max_new_tokens": 512,
+    "do_sample": false,
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": 0,
+    "repetition_penalty": 1.0,
+    "num_beams": 1,
+    "eos_token_ids": [
+      151645,
+      151643
+    ],
+    "pad_token_id": 151643,
+    "use_cache": true,
+    "suppress_token_ids": [
+      151652,
+      151653,
+      151655,
+      151656
+    ]
+  }
+}

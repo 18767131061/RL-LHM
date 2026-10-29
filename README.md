@@ -1,49 +1,59 @@
 # RL-LHM
 
-Code for **Risk-aware lesion-grounded reinforcement learning for structured vision–language diagnosis of liver lesions in multi-phase CT**.
+Training and evaluation code for **Risk-aware lesion-grounded reinforcement learning for structured vision–language diagnosis of liver lesions in multi-phase CT**.
 
-The repository implements supervised fine-tuning, grouped reinforcement learning, frozen visual feature extraction, inference, and lesion-level and patient-level evaluation. Training uses a single-process PyTorch loop and Hugging Face causal image/text models. The visual feature extractor uses Qwen3-VL's final vision-block patch states.
+SFT and RL run on **four NVIDIA A800 GPUs on one Linux host**, using Qwen3-VL-4B, BF16, DeepSpeed ZeRO-2, CPU AdamW state offload, and activation checkpointing. The pipeline includes frozen visual features, structured lesion rewards, SHAE/GRPO, DA-CVQ/VGS, patient aggregation, and detection evaluation over every input phase slice.
 
-## Installation
+## Install
 
-Use Python 3.10 or newer, then install from the repository root:
-
-```sh
-python -m pip install -r requirements.txt
-```
-
-## Workflow
-
-1. Prepare separate training and evaluation manifests with complete three-phase image groups, structured lesion annotations, prompts, and patient labels. See the [manifest specification](docs/configuration.md#manifest).
-2. Run SFT using the selected base model and processor.
-3. Extract training visual vectors from that run's SFT checkpoint with one shared fixed projection.
-4. Run RL using the SFT checkpoint as both the initial policy and the frozen reference. Component switches select SHAE, RARS, and DA-CVQ/VGS.
-5. Generate one completion and its mean token NLL for each evaluation group, then compute patient and lesion metrics.
-
-Supply the configuration paths and run these commands from the repository root:
+Use Python 3.10–3.12, a CUDA-enabled PyTorch installation, a CUDA toolkit compatible with PyTorch, and a C++ compiler for DeepSpeed CPUAdam. Allow at least 128 GB of host RAM for model loading and offloaded optimizer state.
 
 ```sh
-python -m training.run sft --config "$SFT_CONFIG"
-python -m inference.visual_features --config "$FEATURE_CONFIG"
-python -m training.run rl --config "$RL_CONFIG"
-python -m inference.run --config "$INFERENCE_CONFIG"
-python -m evaluation.evaluate --manifest "$EVALUATION_MANIFEST" --predictions "$PREDICTIONS" --iou-thresholds "$IOU_THRESHOLD" --output-dir "$METRICS_DIR"
+python -m pip install -r requirements-training.txt
 ```
 
-[Configuration fields and outputs](docs/configuration.md) describe each stage. [Algorithm contracts](docs/algorithms.md) define rewards, advantages, policy loss, curriculum updates, and voting.
+## Four-GPU workflow
 
-## Source layout
+Prepare patient-disjoint manifests at `datasets/train.json` and `datasets/test.json` using the [data specification](docs/configuration.md#manifest). Edit the manifest paths and diagnostic vocabulary/severity matrix in `configs/` for your dataset. Image paths are relative to their manifest; configuration paths are relative to the repository root.
 
-| Directory | Purpose |
-| --- | --- |
-| `data/` | Manifest loading, patient population, and training-group class counts |
-| `models/` | Three-image chat inputs, completion probabilities, and frozen Qwen3-VL features |
-| `training/` | SFT/RL optimization, component switches, epoch checkpoints, and continuation |
-| `inference/` | Feature-manifest creation and keyed completion generation |
-| `rewards/` | Structured output parsing and RARS reward construction |
-| `rl/` | SHAE, GRPO, token objective, visual projection, DA-CVQ, and VGS |
-| `matching/` | IoU/GIoU geometry and three detection matching protocols |
-| `aggregation/` | Group voting and patient diagnosis with NLL tie-breaking |
-| `evaluation/` | Fixed-population patient classification and lesion metrics |
+```sh
+bash scripts/train_4gpu.sh sft configs/sft_4xa800.json
+python -m inference.visual_features --config configs/visual_features.json
+bash scripts/train_4gpu.sh rl configs/rl_4xa800.json
+python -m inference.run --config configs/inference.json
+python -m evaluation.evaluate \
+  --manifest datasets/test.json --predictions predictions/test.jsonl \
+  --iou-thresholds 0 0.25 0.5 0.75 --output-dir metrics/test
+```
 
-The [file guide](docs/code_map.md) explains every source file. Code is distributed under the MIT License.
+The equivalent direct training command is:
+
+```sh
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nnodes=1 --nproc_per_node=4 \
+  -m training.run rl --config configs/rl_4xa800.json
+```
+
+The supplied SFT configuration uses a global batch of 128 inputs. RL uses four input occurrences and two completions per occurrence, giving eight completions per update. Both use one sequence per GPU forward pass and normalize by the **global number of retained target tokens**, including partial final batches. Each image is limited to 262,144 pixels; the total sequence cap is 4,096 tokens and generation is capped at 512 tokens.
+
+Checkpoints are saved after each epoch. To continue, set `resume_from` to an `epoch_XXXX` directory and retain the original `model` source. `loop.epochs` is the total desired epoch count. Checkpoints contain the Hugging Face model/processor, ZeRO optimizer shards, per-rank random states, UID baselines, and curriculum state.
+
+## Algorithms and metrics
+
+[Algorithm contracts](docs/algorithms.md) define the structured reward, RMS-normalized SHAE history branch, sampling policy, and global token objective. Reward utilities explicitly include missed lesions and unmatched predictions. Main detection metrics include background false positives; `detection_positive_only` reports the separately named positive-slice conditional metrics. These definitions apply to newly generated runs and evaluations.
+
+[Configuration fields](docs/configuration.md) describe the supplied settings. [Source layout](docs/code_map.md) maps the implementation.
+
+## Tests
+
+```sh
+python -m pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+On the four-GPU training host, check BF16 ZeRO-2 accumulation and checkpoint continuation with a small Qwen3-VL model:
+
+```sh
+torchrun --standalone --nproc_per_node=4 -m tests.zero2_smoke --output /tmp/rl-lhm-zero-test
+```
+
+Code is distributed under the MIT License.
