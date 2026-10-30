@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
+import sys
 from typing import Sequence
 
 import numpy as np
@@ -29,19 +31,24 @@ def _validated_box(box: Sequence[float]) -> tuple[float, float, float, float]:
 
 
 def _overlap_areas(first: Sequence[float], second: Sequence[float]) -> tuple[float, float, float]:
-    """Scale both boxes per axis to avoid overflow/underflow in their areas."""
+    """Scale axes by powers of two, preserving integer-coordinate geometry.
+
+    Binary scaling avoids overflow without the extra rounding introduced by
+    division by an arbitrary coordinate maximum. In the [0,1000] schema,
+    integer coordinates and their area arithmetic remain exactly representable.
+    """
     ax1, ay1, ax2, ay2 = _validated_box(first)
     bx1, by1, bx2, by2 = _validated_box(second)
-    x_scale = max(abs(ax1), abs(ax2), abs(bx1), abs(bx2)) or 1.0
-    y_scale = max(abs(ay1), abs(ay2), abs(by1), abs(by2)) or 1.0
-    ax1, ax2, bx1, bx2 = (value / x_scale for value in (ax1, ax2, bx1, bx2))
-    ay1, ay2, by1, by2 = (value / y_scale for value in (ay1, ay2, by1, by2))
+    x_exponent = math.frexp(max(abs(ax1), abs(ax2), abs(bx1), abs(bx2)))[1]
+    y_exponent = math.frexp(max(abs(ay1), abs(ay2), abs(by1), abs(by2)))[1]
+    ax1, ax2, bx1, bx2 = (math.ldexp(value, -x_exponent) for value in (ax1, ax2, bx1, bx2))
+    ay1, ay2, by1, by2 = (math.ldexp(value, -y_exponent) for value in (ay1, ay2, by1, by2))
     intersection_width = max(0.0, min(ax2, bx2) - max(ax1, bx1))
     intersection_height = max(0.0, min(ay2, by2) - max(ay1, by1))
     intersection = intersection_width * intersection_height
     first_area = (ax2 - ax1) * (ay2 - ay1)
     second_area = (bx2 - bx1) * (by2 - by1)
-    union = first_area + second_area - intersection
+    union = math.fsum((first_area, second_area, -intersection))
     enclosure = (max(ax2, bx2) - min(ax1, bx1)) * (max(ay2, by2) - min(ay1, by1))
     return intersection, union, enclosure
 
@@ -56,6 +63,13 @@ def generalized_box_iou(first: Sequence[float], second: Sequence[float]) -> floa
     """Return IoU - (enclosing rectangle area - union) / enclosing area."""
     intersection, union, enclosure = _overlap_areas(first, second)
     iou = intersection / union if union > 0 else 0.0
+    # One final division avoids rounding two ratios before subtracting them.
+    # For schema-range integer boxes these products are exact binary values.
+    denominator = union * enclosure
+    if denominator >= sys.float_info.min:
+        return (intersection * enclosure - union * (enclosure - union)) / denominator
+    # Extremely thin boxes can underflow the product even when each area is
+    # representable; divide first in that case to retain the previous range.
     return iou - (enclosure - union) / enclosure if enclosure > 0 else iou
 
 

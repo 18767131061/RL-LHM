@@ -52,6 +52,8 @@ Each input group votes by lesion-label majority. Background records do not vote;
 
 Main `detection` statistics count TP/FP/FN across **all input phase slices**, including predictions on background. `detection_positive_only` exposes conditional positive-slice metrics separately. Background FP count, FP per background phase, and FP per patient are reported. Unthresholded class-agnostic mean IoU retains all GT lesions in its denominator. Prediction UIDs must cover the manifest exactly once.
 
+Geometry uses power-of-two axis scaling and compensated union-area summation. GIoU uses a common denominator when its product is in the normal floating-point range, with divide-first evaluation for extremely thin boxes. Integer boxes in the `[0,1000]` schema retain exact area arithmetic before the final ratio. Eligibility comparisons remain strict to their definitions: `>=` for positive IoU thresholds and the configured GIoU gate, and `> 0` for the positive-overlap endpoint; no acceptance tolerance is added.
+
 
 Macro classification averages only the explicitly fixed `metric_classes`; the complete `output_classes` vocabulary remains legal for parsing and all voting stages. An out-of-target prediction contributes an error and a false negative to its true class. Missing classes in bootstrap draws retain zero per-class metrics in the fixed macro denominator.
 
