@@ -75,7 +75,7 @@ def load_manifest(path: str | Path) -> Manifest:
     if (not isinstance(payload, dict) or not {"patients", "records"} <= payload.keys()
             or set(payload) - {"classes", "output_classes", "metric_classes", "patients", "records", "patient_centers"}
             or ("classes" in payload) == ("output_classes" in payload)):
-        raise ValueError("Manifest needs output_classes, patients, records; classes is a legacy alias")
+        raise ValueError("Manifest needs output_classes, patients, records; classes is an output_classes alias")
     classes = payload.get("output_classes", payload.get("classes"))
     if (not isinstance(classes, list) or not classes
             or any(not isinstance(c, str) or not c.strip() for c in classes)

@@ -138,24 +138,24 @@ BOXES = [[322.7027245272002, 0., 521.3616755413314, 100.],
 
 
 def test_threshold_matching_preserves_true_positives_after_extra_box():
-    for n, legacy_tp in ((2, 2), (3, 1)):
+    for n, max_iou_tp in ((2, 2), (3, 1)):
         matrix = box_iou_matrix(BOXES[:2], BOXES[2:2+n])
-        legacy = evaluate_similarity_matrix(matrix, ["HCC"]*2, ["HCC"]*n, CLASS_AGNOSTIC, 0.5)
+        max_iou = evaluate_similarity_matrix(matrix, ["HCC"]*2, ["HCC"]*n, CLASS_AGNOSTIC, 0.5)
         aware = evaluate_similarity_matrix(matrix, ["HCC"]*2, ["HCC"]*n, THRESHOLD_CLASS_AGNOSTIC, 0.5)
-        assert legacy.tp == legacy_tp
+        assert max_iou.tp == max_iou_tp
         assert aware.tp == 2
         assert aware.fp == n - 2
     gt = completion([lesion(box=box) for box in BOXES[:2]])
     manifest = Manifest(("HCC",), {"p": "HCC"}, [dict(uid="u", patient_id="p", ground_truth=gt)])
     rows = [dict(uid="u", completion=completion([lesion(box=box) for box in BOXES[2:]]), nll=1)]
-    old = evaluate(manifest, rows, iou_thresholds=[0.5])
-    new = evaluate(manifest, rows, iou_thresholds=[0.5], matching_method="threshold_aware")
-    assert new["localization"] == old["localization"]
-    assert new["detection"][THRESHOLD_CLASS_AGNOSTIC][0]["tp"] == 2
-    assert new["matching_sensitivity"]
+    max_iou = evaluate(manifest, rows, iou_thresholds=[0.5])
+    threshold_aware = evaluate(manifest, rows, iou_thresholds=[0.5], matching_method="threshold_aware")
+    assert threshold_aware["localization"] == max_iou["localization"]
+    assert threshold_aware["detection"][THRESHOLD_CLASS_AGNOSTIC][0]["tp"] == 2
+    assert threshold_aware["matching_sensitivity"]
 
 
-def test_threshold_class_constraint_and_legacy_geometry_first():
+def test_threshold_class_constraint_and_geometry_first():
     matrix = np.array([[0.9, 0.6], [0.6, 0.9]])
     gt, pred = ["A", "B"], ["B", "A"]
     assert evaluate_similarity_matrix(matrix, gt, pred, GEOMETRY_FIRST_CLASS_AWARE, 0.5).tp == 0

@@ -93,7 +93,7 @@ def compute_shae_advantage(
     Both branches use population moments. RMS bounds historical offsets without
     dividing them by near-zero within-group variance. No jitter is injected:
     first-visit equal rewards carry zero information and yield zero advantage.
-    The legacy noise_std argument must be zero.
+    The noise_std argument must be zero.
     """
     scores, mask = _advantage_inputs(rewards, response_mask, index, epsilon)
     groups = rollout_groups(index, sample_index)

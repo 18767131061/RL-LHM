@@ -202,13 +202,14 @@ def evaluate(
                         if protocol == CLASS_AGNOSTIC:
                             ca_iou_sum += result.assigned_iou_sum
             for threshold in thresholds:
-                for legacy, aware in ((CLASS_AGNOSTIC, THRESHOLD_CLASS_AGNOSTIC),
-                                      (SAME_CLASS_PRIORITY, THRESHOLD_CLASS_AWARE)):
-                    old, new = unit_results[(legacy, threshold)], unit_results[(aware, threshold)]
-                    if old.tp != new.tp:
+                for max_iou_protocol, aware_protocol in ((CLASS_AGNOSTIC, THRESHOLD_CLASS_AGNOSTIC),
+                                                         (SAME_CLASS_PRIORITY, THRESHOLD_CLASS_AWARE)):
+                    max_iou_result = unit_results[(max_iou_protocol, threshold)]
+                    aware_result = unit_results[(aware_protocol, threshold)]
+                    if max_iou_result.tp != aware_result.tp:
                         sensitivity.append(dict(uid=uid, phase=phase, iou_threshold=threshold,
-                                                original_protocol=legacy, threshold_protocol=aware,
-                                                original_tp=old.tp, threshold_tp=new.tp))
+                                                original_protocol=max_iou_protocol, threshold_protocol=aware_protocol,
+                                                original_tp=max_iou_result.tp, threshold_tp=aware_result.tp))
     patient_rows = []
     for patient_id, truth in patients.items():
         result = aggregate_patient(votes[patient_id], classes)

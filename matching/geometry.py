@@ -69,7 +69,7 @@ def generalized_box_iou(first: Sequence[float], second: Sequence[float]) -> floa
     if denominator >= sys.float_info.min:
         return (intersection * enclosure - union * (enclosure - union)) / denominator
     # Extremely thin boxes can underflow the product even when each area is
-    # representable; divide first in that case to retain the previous range.
+    # representable; divide first in that case to retain the representable range.
     return iou - (enclosure - union) / enclosure if enclosure > 0 else iou
 
 

@@ -119,7 +119,7 @@ def match_protocol(
         for assignment in hungarian_assignment(objective)
     ]
 
-# These are distinct protocols: geometry-first class-aware remains geometry-first.
+# Threshold-aware protocols optimize eligible matches at the selected IoU gate.
 THRESHOLD_CLASS_AGNOSTIC = "threshold_aware_class_agnostic"
 THRESHOLD_CLASS_AWARE = "threshold_aware_class_aware"
 THRESHOLD_PROTOCOLS = (THRESHOLD_CLASS_AGNOSTIC, THRESHOLD_CLASS_AWARE)

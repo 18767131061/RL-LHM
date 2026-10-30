@@ -1,4 +1,4 @@
-"""Lesion-level detection metrics under three one-to-one matching protocols."""
+"""Lesion-level detection metrics under named one-to-one matching protocols."""
 from __future__ import annotations
 
 import math

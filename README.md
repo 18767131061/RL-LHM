@@ -39,7 +39,7 @@ Checkpoints are saved after each epoch. To continue, set `resume_from` to an `ep
 
 ## Algorithms and metrics
 
-[Algorithm contracts](docs/algorithms.md) define the structured reward, RMS-normalized SHAE history branch, sampling policy, and global token objective. Reward utilities explicitly include missed lesions and unmatched predictions. Main detection metrics include background false positives; `detection_positive_only` reports the separately named positive-slice conditional metrics. These definitions apply to newly generated runs and evaluations.
+[Algorithm contracts](docs/algorithms.md) define the structured reward, RMS-normalized SHAE history branch, sampling policy, and global token objective. Reward utilities explicitly include missed lesions and unmatched predictions. Main detection metrics include background false positives; `detection_positive_only` reports the separately named positive-slice conditional metrics.
 
 [Configuration fields](docs/configuration.md) describe the supplied settings. [Source layout](docs/code_map.md) maps the implementation.
 
