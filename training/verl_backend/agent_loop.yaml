@@ -1,0 +1,2 @@
+- name: rl_lhm_single_turn
+  _target_: training.verl_backend.rollout.RawSingleTurnLoop

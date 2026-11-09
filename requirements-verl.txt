@@ -1,0 +1,5 @@
+# Project supplements installed AFTER scripts/setup_verl.sh has synchronized
+# the official a911bca25d6adb26f5bef2dc57e7ba62e99b7ade uv.lock with fsdp+vllm.
+# The carrier and CUDA wheels come from that lock and its wheelhouse sources.
+scipy>=1.10,<2
+Pillow>=10,<14

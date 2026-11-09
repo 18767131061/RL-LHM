@@ -1,0 +1,3 @@
+# Optional DICOM volume-reading utility in data/dicom.py.
+numpy>=1.24,<3
+SimpleITK>=2.4,<3
